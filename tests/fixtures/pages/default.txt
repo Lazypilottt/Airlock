@@ -1,0 +1,1 @@
+<html><body><h1>Default Canned Page</h1><p>Standard canned test content.</p></body></html>
