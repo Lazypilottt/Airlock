@@ -1,0 +1,111 @@
+# Label pack for Microsoft's Playwright MCP server (browser automation).
+# Tool names checked against the microsoft/playwright-mcp README on 2026-11-06.
+#
+# Navigation is both a source (page content) and a sink (the URL carries data
+# out). Typing, form filling, uploads and clicks can submit data to a site.
+# Cookie and storage reads return session secrets.
+name: playwright
+description: Playwright MCP server (@playwright/mcp)
+source: https://github.com/microsoft/playwright-mcp
+servers: ["playwright", "*playwright*", "browser", "*browser*"]
+tools:
+  - tool: browser_navigate
+    labels: [source_untrusted, sink]
+    args: {url: destination}
+  - tool: browser_navigate_back
+    labels: [source_untrusted]
+  - tool: browser_snapshot
+    labels: [source_untrusted]
+  - tool: browser_take_screenshot
+    labels: [source_untrusted]
+  - tool: browser_console_messages
+    labels: [source_untrusted]
+  - tool: browser_network_requests
+    labels: [source_untrusted]
+  - tool: browser_network_request
+    labels: [source_untrusted, source_secret]
+  - tool: browser_tabs
+    labels: [source_untrusted]
+  - tool: browser_find
+    labels: [source_untrusted]
+  - tool: browser_wait_for
+    labels: [source_untrusted]
+  - tool: "browser_verify_*"
+    labels: [source_untrusted]
+  - tool: browser_generate_locator
+    labels: [source_untrusted]
+
+  # Code execution returns page data and can send data anywhere.
+  - tool: browser_evaluate
+    labels: [source_untrusted, sink]
+    args: {function: code}
+  - tool: browser_run_code_unsafe
+    labels: [source_untrusted, sink]
+    args: {code: code, filename: path}
+
+  # Input that can submit data to a site.
+  - tool: browser_type
+    labels: [sink]
+    args: {text: content}
+  - tool: browser_fill_form
+    labels: [sink]
+    args: {fields: content}
+  - tool: browser_select_option
+    labels: [sink]
+  - tool: browser_click
+    labels: [sink]
+  - tool: browser_press_key
+    labels: [sink]
+  - tool: browser_drag
+    labels: [sink]
+  - tool: browser_drop
+    labels: [sink]
+  - tool: browser_handle_dialog
+    labels: [sink]
+  - tool: browser_file_upload
+    labels: [sink]
+    args: {paths: path}
+  - tool: "browser_mouse_*"
+    labels: [sink]
+  - tool: browser_route
+    labels: [sink]
+    args: {body: content}
+
+  # Session secrets.
+  - tool: browser_cookie_get
+    labels: [source_secret]
+  - tool: browser_cookie_list
+    labels: [source_secret]
+  - tool: browser_localstorage_get
+    labels: [source_secret]
+  - tool: browser_localstorage_list
+    labels: [source_secret]
+  - tool: browser_sessionstorage_get
+    labels: [source_secret]
+  - tool: browser_sessionstorage_list
+    labels: [source_secret]
+  - tool: browser_storage_state
+    labels: [source_secret, sink]
+    args: {filename: path}
+  - tool: browser_cookie_set
+    labels: [sink]
+    args: {value: content}
+  - tool: browser_localstorage_set
+    labels: [sink]
+    args: {value: content}
+  - tool: browser_sessionstorage_set
+    labels: [sink]
+    args: {value: content}
+  - tool: browser_set_storage_state
+    labels: [sink]
+  - tool: "browser_*_delete"
+    labels: [sink]
+  - tool: "browser_*_clear"
+    labels: [sink]
+  - tool: browser_pdf_save
+    labels: [sink]
+    args: {filename: path}
+
+  # Viewport, tracing, recording and highlighting change nothing outside the browser.
+  - tool: "browser_*"
+    labels: []

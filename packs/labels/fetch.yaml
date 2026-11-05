@@ -1,0 +1,13 @@
+# Label pack for the reference fetch MCP server.
+# Tool name checked against src/fetch/src/mcp_server_fetch/server.py on 2026-11-06.
+#
+# fetch is both a source (it returns pages written by anyone) and a sink: a
+# GET request carries data out in its URL, path and query string.
+name: fetch
+description: Reference fetch server (mcp-server-fetch)
+source: https://github.com/modelcontextprotocol/servers/tree/main/src/fetch
+servers: ["fetch", "*fetch*", "web-fetch"]
+tools:
+  - tool: fetch
+    labels: [source_untrusted, sink]
+    args: {url: destination}

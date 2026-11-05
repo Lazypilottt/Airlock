@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from airlock.detect.normalize import NormalizedText, normalize
 from airlock.models import Decision, ToolDef, ToolResult, Verdict
+from airlock.resources import packs_dir
 
 
 class Rule(BaseModel):
@@ -72,7 +73,7 @@ class RuleDetector:
     """Apply a rule pack to normalized text."""
 
     def __init__(self, pack: RulePack | None = None, pack_path: Path | str | None = None) -> None:
-        default = Path(__file__).parents[2] / "packs" / "rules" / "core-v1.yaml"
+        default = packs_dir() / "rules" / "core-v1.yaml"
         self.pack = pack or RulePack.load(pack_path or default)
 
     def detect(self, value: str | NormalizedText, applies_to: str) -> DetectionResult:

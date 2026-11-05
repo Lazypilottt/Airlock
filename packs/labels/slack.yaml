@@ -1,0 +1,72 @@
+# Label pack for Slack MCP servers. Covers two servers whose tool names do not
+# overlap:
+#   - the reference Slack server, now maintained by Zencoder
+#     (zencoderai/slack-mcp-server, formerly @modelcontextprotocol/server-slack);
+#   - korotovsky/slack-mcp-server.
+# Tool names checked against both READMEs on 2026-11-06.
+name: slack
+description: Slack MCP servers (zencoderai/slack-mcp-server, korotovsky/slack-mcp-server)
+source: https://github.com/zencoderai/slack-mcp-server
+servers: ["slack", "*slack*"]
+tools:
+  # zencoderai / reference server
+  - tool: slack_post_message
+    labels: [sink]
+    args: {channel_id: destination, text: content}
+  - tool: slack_reply_to_thread
+    labels: [sink]
+    args: {channel_id: destination, text: content}
+  - tool: slack_add_reaction
+    labels: [sink]
+    args: {channel_id: destination}
+  - tool: slack_get_channel_history
+    labels: [source_untrusted]
+  - tool: slack_get_thread_replies
+    labels: [source_untrusted]
+  - tool: slack_list_channels
+    labels: [source_untrusted]
+  - tool: slack_get_users
+    labels: [source_untrusted]
+  - tool: slack_get_user_profile
+    labels: [source_untrusted]
+
+  # korotovsky server
+  - tool: conversations_add_message
+    labels: [sink]
+    args: {channel_id: destination, payload: content}
+  - tool: conversations_history
+    labels: [source_untrusted]
+  - tool: conversations_replies
+    labels: [source_untrusted]
+  - tool: conversations_search_messages
+    labels: [source_untrusted]
+  - tool: conversations_unreads
+    labels: [source_untrusted]
+  - tool: conversations_mark
+    labels: [sink]
+  - tool: channels_list
+    labels: [source_untrusted]
+  - tool: users_search
+    labels: [source_untrusted]
+  - tool: usergroups_list
+    labels: [source_untrusted]
+  - tool: usergroups_me
+    labels: []
+  - tool: saved_list
+    labels: [source_untrusted]
+  - tool: reactions_add
+    labels: [sink]
+    args: {channel_id: destination}
+  - tool: reactions_remove
+    labels: [sink]
+    args: {channel_id: destination}
+  - tool: usergroups_create
+    labels: [sink]
+  - tool: usergroups_update
+    labels: [sink]
+  - tool: usergroups_users_update
+    labels: [sink]
+  - tool: saved_update
+    labels: [sink]
+  - tool: saved_clear_completed
+    labels: [sink]

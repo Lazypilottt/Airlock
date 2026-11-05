@@ -1,0 +1,57 @@
+# Label pack for the reference filesystem MCP server.
+# Tool names checked against src/filesystem/server.ts on 2026-11-06.
+#
+# Read tools are labelled source_untrusted because files in the allowed
+# directories may come from unknown repositories or downloads. They are not
+# labelled source_secret by default: doing so would make the default policy
+# deny ordinary edits that copy identifiers between files. If your allowed
+# directories hold secrets, add an override in airlock.yaml, for example:
+#
+#   labels:
+#     - server: filesystem
+#       tool: "read_*"
+#       labels: [source_untrusted, source_secret]
+name: filesystem
+description: Reference filesystem server (@modelcontextprotocol/server-filesystem)
+source: https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem
+servers: ["filesystem", "*filesystem*", "fs", "files"]
+tools:
+  - tool: read_file
+    labels: [source_untrusted]
+  - tool: read_text_file
+    labels: [source_untrusted]
+  - tool: read_media_file
+    labels: [source_untrusted]
+  - tool: read_multiple_files
+    labels: [source_untrusted]
+  - tool: write_file
+    labels: [sink]
+    args: {path: path, content: content}
+  - tool: append_file
+    labels: [sink]
+    args: {path: path, content: content}
+  - tool: edit_file
+    labels: [sink]
+    args: {path: path, edits: content}
+  - tool: create_directory
+    labels: [sink]
+    args: {path: path}
+  - tool: move_file
+    labels: [sink]
+    args: {source: path, destination: path}
+  - tool: copy_file
+    labels: [sink]
+    args: {source: path, destination: path}
+  # Listing and metadata tools return names chosen by whoever created the files.
+  - tool: list_directory
+    labels: [source_untrusted]
+  - tool: list_directory_with_sizes
+    labels: [source_untrusted]
+  - tool: directory_tree
+    labels: [source_untrusted]
+  - tool: search_files
+    labels: [source_untrusted]
+  - tool: get_file_info
+    labels: []
+  - tool: list_allowed_directories
+    labels: []

@@ -34,6 +34,21 @@ class ThresholdOverride(BaseModel):
     block_above: float | None = Field(default=None, ge=0, le=1)
 
 
+LabelName = Literal["source_untrusted", "source_secret", "sink"]
+ArgRoleName = Literal["destination", "content", "path", "code"]
+
+
+class LabelOverride(BaseModel):
+    """A user label override under ``labels:``; wins over label packs and heuristics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    server: str = Field(default="*", description="Glob over server names.")
+    tool: str = Field(min_length=1, description="Tool name or glob.")
+    labels: list[LabelName] = Field(default_factory=list)
+    args: dict[str, ArgRoleName] = Field(default_factory=dict)
+
+
 def get_default_config_locations() -> tuple[Path, ...]:
     """Return default configuration search paths dynamically."""
     return (
@@ -59,6 +74,7 @@ class AirlockConfig(BaseModel):
     spotlight: bool = False
     server_overrides: dict[str, ThresholdOverride] = Field(default_factory=dict)
     tool_overrides: dict[str, ThresholdOverride] = Field(default_factory=dict)
+    labels: list[LabelOverride] = Field(default_factory=list)
 
     @field_validator("data_dir", "log_path", mode="before")
     @classmethod
@@ -129,6 +145,7 @@ __all__ = [
     "AirlockConfig",
     "ClassifierConfig",
     "ConfigError",
+    "LabelOverride",
     "ThresholdOverride",
     "find_config_path",
     "get_default_config_locations",

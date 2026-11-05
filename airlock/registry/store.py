@@ -15,6 +15,7 @@ from typing import Any
 from airlock.audit.secrets import mask_secrets
 from airlock.models import ToolDef
 from airlock.registry.checks import DescriptionCheck
+from airlock.registry.labels import LabelResolver, ToolLabels
 
 
 def compute_tool_hash(tool: ToolDef | dict[str, Any]) -> tuple[str, str]:
@@ -72,6 +73,32 @@ def generate_unified_diff(old_json: str, new_json: str, tool_name: str) -> str:
     return "".join(diff)
 
 
+# Columns added in v0.2 for tool labels; created on demand for older databases.
+_LABEL_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("label_origin", "TEXT NOT NULL DEFAULT 'none'"),
+    ("label_source", "TEXT NOT NULL DEFAULT ''"),
+    ("arg_roles", "TEXT NOT NULL DEFAULT '{}'"),
+)
+
+
+def labels_from_row(row: dict[str, Any]) -> ToolLabels:
+    """Rebuild :class:`ToolLabels` from a ``tools`` table row."""
+    try:
+        labels = json.loads(row.get("labels") or "[]")
+    except (TypeError, ValueError):
+        labels = []
+    try:
+        arg_roles = json.loads(row.get("arg_roles") or "{}")
+    except (TypeError, ValueError):
+        arg_roles = {}
+    return ToolLabels.from_record(
+        labels if isinstance(labels, list) else [],
+        row.get("label_origin"),
+        row.get("label_source"),
+        arg_roles if isinstance(arg_roles, dict) else {},
+    )
+
+
 class ToolRegistry:
     """Manages MCP tool definitions, integrity hash pinning, and status lifecycle."""
 
@@ -108,6 +135,10 @@ class ToolRegistry:
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tools_status ON tools(status);")
+            existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(tools)")}
+            for column, ddl in _LABEL_COLUMNS:
+                if column not in existing_columns:
+                    conn.execute(f"ALTER TABLE tools ADD COLUMN {column} {ddl}")
             conn.commit()
         finally:
             conn.close()
@@ -138,6 +169,11 @@ class ToolRegistry:
         finally:
             conn.close()
 
+    def get_labels(self, server_id: str, tool_name: str) -> ToolLabels | None:
+        """Return the stored labels for a tool, or None if the tool is unknown."""
+        row = self.get_tool(server_id, tool_name)
+        return labels_from_row(row) if row is not None else None
+
     def list_tools(self, server_id: str | None = None) -> list[dict[str, Any]]:
         """List all tools, optionally filtered by server_id."""
         conn = self._get_connection()
@@ -159,8 +195,12 @@ class ToolRegistry:
         tools: Sequence[ToolDef],
         description_checks: Sequence[DescriptionCheck] | None = None,
         auto_approve_new_tools: bool = False,
+        label_resolver: LabelResolver | None = None,
     ) -> tuple[list[ToolDef], list[tuple[str, str]]]:
         """Update tool registry, perform TOFU / hash checks, and return visible tools.
+
+        Labels are re-resolved on every listing so that edits to packs or to
+        ``airlock.yaml`` take effect the next time the server lists its tools.
 
         Returns (visible_tools, [(tool_name, unified_diff), ...]).
         """
@@ -175,6 +215,16 @@ class ToolRegistry:
 
             for tool in tools:
                 hash_hex, def_json = compute_tool_hash(tool)
+                tool_labels = (
+                    label_resolver.resolve(server_id, tool) if label_resolver else ToolLabels()
+                )
+                label_record = tool_labels.to_record()
+                label_values = (
+                    json.dumps(label_record["labels"]),
+                    label_record["origin"],
+                    label_record["source"],
+                    json.dumps(label_record["arg_roles"], sort_keys=True),
+                )
                 cursor = conn.execute(
                     "SELECT * FROM tools WHERE server_id = ? AND tool_name = ?",
                     (server_id, tool.name),
@@ -213,8 +263,9 @@ class ToolRegistry:
                         INSERT INTO tools (
                             server_id, tool_name, hash, definition_json,
                             previous_definition_json, first_seen, last_seen,
-                            status, status_reason, labels
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            status, status_reason, labels,
+                            label_origin, label_source, arg_roles
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             server_id,
@@ -226,7 +277,7 @@ class ToolRegistry:
                             now,
                             status,
                             status_reason,
-                            json.dumps([]),
+                            *label_values,
                         ),
                     )
 
@@ -261,7 +312,11 @@ class ToolRegistry:
                                 definition_json = ?,
                                 last_seen = ?,
                                 status = ?,
-                                status_reason = ?
+                                status_reason = ?,
+                                labels = ?,
+                                label_origin = ?,
+                                label_source = ?,
+                                arg_roles = ?
                             WHERE server_id = ? AND tool_name = ?
                             """,
                             (
@@ -271,6 +326,7 @@ class ToolRegistry:
                                 now,
                                 status,
                                 status_reason,
+                                *label_values,
                                 server_id,
                                 tool.name,
                             ),
@@ -279,8 +335,13 @@ class ToolRegistry:
                         # Definition unchanged
                         status = current_status
                         conn.execute(
-                            "UPDATE tools SET last_seen = ? WHERE server_id = ? AND tool_name = ?",
-                            (now, server_id, tool.name),
+                            """
+                            UPDATE tools
+                            SET last_seen = ?, labels = ?, label_origin = ?,
+                                label_source = ?, arg_roles = ?
+                            WHERE server_id = ? AND tool_name = ?
+                            """,
+                            (now, *label_values, server_id, tool.name),
                         )
 
                 # Only approved tools are visible to the MCP client
@@ -374,4 +435,5 @@ __all__ = [
     "ToolRegistry",
     "compute_tool_hash",
     "generate_unified_diff",
+    "labels_from_row",
 ]

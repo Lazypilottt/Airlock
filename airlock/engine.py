@@ -17,6 +17,7 @@ from airlock.detect.cascade import CascadeResultCheck
 from airlock.detect.rules import L1DescriptionCheck
 from airlock.models import Decision, ToolCall, ToolDef, ToolResult, Verdict
 from airlock.registry.checks import DescriptionCheck, StubDescriptionCheck
+from airlock.registry.labels import LabelResolver, ToolLabels
 from airlock.registry.store import ToolRegistry
 
 VERDICT_SEVERITY: dict[Verdict, int] = {
@@ -83,6 +84,7 @@ class Engine:
         description_checks: Sequence[DescriptionCheck] | None = None,
         audit_store: AuditStore | None = None,
         registry: ToolRegistry | None = None,
+        label_resolver: LabelResolver | None = None,
     ) -> None:
         self.config: AirlockConfig = config if config is not None else AirlockConfig()
         self.sessions: dict[str, Session] = {}
@@ -106,6 +108,16 @@ class Engine:
         self.registry: ToolRegistry = (
             registry if registry is not None else ToolRegistry(self.config.data_dir / "registry.db")
         )
+        self.label_resolver: LabelResolver = (
+            label_resolver
+            if label_resolver is not None
+            else LabelResolver(user_entries=self.config.labels)
+        )
+
+    def labels_for(self, server_id: str, tool_name: str) -> ToolLabels:
+        """Return a tool's stored labels; tools never listed have no labels."""
+        stored = self.registry.get_labels(server_id, tool_name)
+        return stored if stored is not None else ToolLabels()
 
     def get_or_create_session(self, session_id: str) -> Session:
         """Retrieve existing session or instantiate a new one."""
@@ -173,6 +185,7 @@ class Engine:
             tools=normalized_tools,
             description_checks=self._description_checks,
             auto_approve_new_tools=self.config.auto_approve_new_tools,
+            label_resolver=self.label_resolver,
         )
 
         timeout_sec = self.config.check_timeout_ms / 1000.0

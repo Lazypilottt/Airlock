@@ -16,7 +16,7 @@ from rich.table import Table
 from airlock.audit.store import AuditStore
 from airlock.config import load_config
 from airlock.engine import Engine
-from airlock.registry.store import ToolRegistry
+from airlock.registry.store import ToolRegistry, labels_from_row
 from airlock.transport.stdio import run_stdio_proxy
 
 app = typer.Typer(
@@ -196,6 +196,12 @@ def tools_list(
     cfg = load_config(config)
     registry = ToolRegistry(cfg.data_dir / "registry.db")
     tool_rows = registry.list_tools(server_id=server)
+    for row in tool_rows:
+        resolved = labels_from_row(row).to_record()
+        row["labels"] = resolved["labels"]
+        row["arg_roles"] = resolved["arg_roles"]
+        row["label_origin"] = resolved["origin"]
+        row["label_source"] = resolved["source"]
 
     if json_output:
         print(json.dumps(tool_rows, indent=2))
@@ -210,6 +216,8 @@ def tools_list(
     table.add_column("Server", style="cyan", no_wrap=True)
     table.add_column("Tool", style="bold", no_wrap=True)
     table.add_column("Status", no_wrap=True)
+    table.add_column("Labels", no_wrap=True)
+    table.add_column("Label origin", style="dim", no_wrap=True)
     table.add_column("Hash", style="dim", no_wrap=True)
     table.add_column("Status Reason", style="dim")
     table.add_column("Last Seen", style="dim", no_wrap=True)
@@ -223,10 +231,14 @@ def tools_list(
     for t in tool_rows:
         status_styled = status_styles.get(t["status"], t["status"])
         last_seen_str = datetime.fromtimestamp(t["last_seen"]).strftime("%Y-%m-%d %H:%M:%S")
+        origin = t["label_origin"]
+        origin_text = f"{origin}:{t['label_source']}" if origin == "pack" else origin
         table.add_row(
             t["server_id"],
             t["tool_name"],
             status_styled,
+            ", ".join(t["labels"]) or "-",
+            origin_text,
             t["hash"][:12],
             t["status_reason"] or "-",
             last_seen_str,

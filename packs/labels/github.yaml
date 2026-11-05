@@ -1,0 +1,113 @@
+# Label pack for GitHub's official MCP server.
+# Tool names checked against the github/github-mcp-server README on 2026-11-06.
+#
+# Exact names are matched before globs, so the specific entries at the top
+# override the read/write globs further down.
+name: github
+description: GitHub MCP server (github/github-mcp-server)
+source: https://github.com/github/github-mcp-server
+servers: ["github", "*github*", "gh"]
+tools:
+  # Secret scanning alerts can contain the leaked secret itself.
+  - tool: get_secret_scanning_alert
+    labels: [source_untrusted, source_secret]
+  - tool: list_secret_scanning_alerts
+    labels: [source_untrusted, source_secret]
+  # The authenticated user's own profile: neither untrusted nor a sink.
+  - tool: get_me
+    labels: []
+  - tool: get_teams
+    labels: []
+  - tool: get_team_members
+    labels: []
+
+  # Writes. owner/repo are destinations: an injected issue could ask the agent
+  # to push to an attacker's repository.
+  - tool: create_or_update_file
+    labels: [sink]
+    args: {owner: destination, repo: destination, path: path, content: content, message: content}
+  - tool: push_files
+    labels: [sink]
+    args: {owner: destination, repo: destination, files: content, message: content}
+  - tool: delete_file
+    labels: [sink]
+    args: {owner: destination, repo: destination, path: path}
+  - tool: create_gist
+    labels: [sink]
+    args: {content: content, description: content, filename: path}
+  - tool: update_gist
+    labels: [sink]
+    args: {content: content, description: content, filename: path}
+  - tool: create_repository
+    labels: [sink]
+    args: {name: destination, description: content}
+  - tool: fork_repository
+    labels: [sink]
+    args: {owner: destination, repo: destination, organization: destination}
+  - tool: create_pull_request
+    labels: [sink]
+    args: {owner: destination, repo: destination, title: content, body: content}
+  - tool: issue_write
+    labels: [sink]
+    args: {owner: destination, repo: destination, title: content, body: content}
+  - tool: add_issue_comment
+    labels: [sink]
+    args: {owner: destination, repo: destination, body: content}
+  - tool: update_issue_comment
+    labels: [sink]
+    args: {owner: destination, repo: destination, body: content}
+  - tool: add_comment_to_pending_review
+    labels: [sink]
+    args: {owner: destination, repo: destination, body: content}
+  - tool: add_reply_to_pull_request_comment
+    labels: [sink]
+    args: {owner: destination, repo: destination, body: content}
+  - tool: discussion_comment_write
+    labels: [sink]
+    args: {owner: destination, repo: destination, body: content}
+  - tool: actions_run_trigger
+    labels: [sink]
+    args: {owner: destination, repo: destination}
+  - tool: merge_pull_request
+    labels: [sink]
+  - tool: request_copilot_review
+    labels: [sink]
+  - tool: star_repository
+    labels: [sink]
+  - tool: unstar_repository
+    labels: [sink]
+  - tool: dismiss_notification
+    labels: [sink]
+  - tool: mark_all_notifications_read
+    labels: [sink]
+  - tool: "manage_*"
+    labels: [sink]
+  - tool: "assign_copilot_to_issue*"
+    labels: [sink]
+  - tool: "create_*"
+    labels: [sink]
+  - tool: "update_*"
+    labels: [sink]
+  - tool: "delete_*"
+    labels: [sink]
+  - tool: "add_*"
+    labels: [sink]
+  - tool: "*_write"
+    labels: [sink]
+
+  # Reads: issues, PRs, code, discussions, logs and search results are
+  # written by outside parties.
+  - tool: "get_*"
+    labels: [source_untrusted]
+  - tool: "list_*"
+    labels: [source_untrusted]
+  - tool: "search_*"
+    labels: [source_untrusted]
+  - tool: "*_read"
+    labels: [source_untrusted]
+  - tool: "*_get"
+    labels: [source_untrusted]
+  - tool: "*_list"
+    labels: [source_untrusted]
+  - tool: github_support_docs_search
+    labels: [source_untrusted]
