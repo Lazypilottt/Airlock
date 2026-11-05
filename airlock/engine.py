@@ -11,8 +11,13 @@ import time
 from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
+from airlock.audit.store import AuditStore
 from airlock.config import AirlockConfig
+from airlock.detect.cascade import CascadeResultCheck
+from airlock.detect.rules import L1DescriptionCheck
 from airlock.models import Decision, ToolCall, ToolDef, ToolResult, Verdict
+from airlock.registry.checks import DescriptionCheck, StubDescriptionCheck
+from airlock.registry.store import ToolRegistry
 
 VERDICT_SEVERITY: dict[Verdict, int] = {
     Verdict.ALLOW: 1,
@@ -75,12 +80,32 @@ class Engine:
         tool_call_checks: Sequence[Any] | None = None,
         tool_result_checks: Sequence[Any] | None = None,
         tools_listed_checks: Sequence[Any] | None = None,
+        description_checks: Sequence[DescriptionCheck] | None = None,
+        audit_store: AuditStore | None = None,
+        registry: ToolRegistry | None = None,
     ) -> None:
         self.config: AirlockConfig = config if config is not None else AirlockConfig()
         self.sessions: dict[str, Session] = {}
         self._tool_call_checks: list[Any] = list(tool_call_checks or [])
-        self._tool_result_checks: list[Any] = list(tool_result_checks or [])
+        self._tool_result_checks: list[Any] = (
+            list(tool_result_checks)
+            if tool_result_checks is not None
+            else [CascadeResultCheck(self.config)]
+        )
         self._tools_listed_checks: list[Any] = list(tools_listed_checks or [])
+        self._description_checks: list[DescriptionCheck] = (
+            list(description_checks)
+            if description_checks is not None
+            else [L1DescriptionCheck(), StubDescriptionCheck()]
+        )
+        self.audit_store: AuditStore | None = (
+            audit_store
+            if audit_store is not None
+            else AuditStore(self.config.data_dir / "audit.db")
+        )
+        self.registry: ToolRegistry = (
+            registry if registry is not None else ToolRegistry(self.config.data_dir / "registry.db")
+        )
 
     def get_or_create_session(self, session_id: str) -> Session:
         """Retrieve existing session or instantiate a new one."""
@@ -100,26 +125,58 @@ class Engine:
         """Register a pluggable check for tool definitions."""
         self._tools_listed_checks.append(check)
 
+    def add_description_check(self, check: DescriptionCheck) -> None:
+        """Register a pluggable tool description check."""
+        self._description_checks.append(check)
+
     async def on_tools_listed(
         self,
         server_id: str,
         tools: Sequence[ToolDef | dict[str, Any]],
     ) -> list[ToolDef]:
-        """Inspect and filter tools advertised by an MCP server."""
+        """Inspect, pin hashes, quarantine rug-pulls, and filter tools for a server."""
         normalized_tools: list[ToolDef] = []
         for item in tools:
-            if isinstance(item, ToolDef):
-                normalized_tools.append(item)
-            elif isinstance(item, dict):
-                data = dict(item)
-                if "server_id" not in data:
-                    data["server_id"] = server_id
-                normalized_tools.append(ToolDef.model_validate(data))
-            else:
-                raise TypeError(f"Expected ToolDef or dict, got {type(item).__name__}")
+            try:
+                if isinstance(item, ToolDef):
+                    normalized_tools.append(item)
+                elif isinstance(item, dict):
+                    data = dict(item)
+                    if "server_id" not in data:
+                        data["server_id"] = server_id
+                    normalized_tools.append(ToolDef.model_validate(data))
+                else:
+                    raise TypeError(f"Expected ToolDef or dict, got {type(item).__name__}")
+            except Exception as exc:
+                if self.config.fail_mode == "closed":
+                    if self.audit_store:
+                        await self.audit_store.log_decision(
+                            session_id="discovery",
+                            server_id=server_id,
+                            direction="list",
+                            tool_name=None,
+                            verdict="DENY",
+                            would_have=None,
+                            rule="malformed_tool_definition",
+                            reasons=[f"Malformed tool definition rejected: {type(exc).__name__}"],
+                            scores={},
+                            latency_ms=0.0,
+                            args=None,
+                            result=None,
+                        )
+                    return []
+                continue
+
+        # Update registry: TOFU, hash pinning, quarantine, description checking
+        visible_tools, _diffs = await self.registry.process_server_tools(
+            server_id=server_id,
+            tools=normalized_tools,
+            description_checks=self._description_checks,
+            auto_approve_new_tools=self.config.auto_approve_new_tools,
+        )
 
         timeout_sec = self.config.check_timeout_ms / 1000.0
-        current_tools = normalized_tools
+        current_tools = visible_tools
 
         for check in self._tools_listed_checks:
             try:
@@ -143,17 +200,168 @@ class Engine:
                 else:
                     return []
 
+        if self.audit_store:
+            await self.audit_store.log_decision(
+                session_id="discovery",
+                server_id=server_id,
+                direction="list",
+                tool_name=None,
+                verdict="ALLOW",
+                would_have=None,
+                rule=None,
+                reasons=[],
+                scores={},
+                latency_ms=0.0,
+                args=None,
+                result=[t.name for t in current_tools],
+            )
+
         return current_tools
 
     async def on_tool_call(self, call: ToolCall) -> Decision:
-        """Evaluate an outbound tool call through registered checks."""
+        """Evaluate an outbound tool call through registry status and registered checks."""
         session = self.get_or_create_session(call.session_id)
-        return await self._run_checks(self._tool_call_checks, call, session)
+
+        # 1. Enforce Tool Registry status (quarantined/pending tools denied)
+        tool_record = self.registry.get_tool(call.server_id, call.tool_name)
+        if tool_record is not None:
+            status = tool_record["status"]
+            status_reason = tool_record.get("status_reason")
+            if status == "quarantined":
+                reason = (
+                    f"Tool '{call.tool_name}' on server '{call.server_id}' is quarantined: "
+                    f"{status_reason or 'definition hash changed'}"
+                )
+                denied_dec = Decision(
+                    verdict=Verdict.DENY,
+                    reasons=[reason],
+                    rule="registry:quarantined",
+                )
+                if self.config.mode == "shadow":
+                    denied_dec.would_have = Verdict.DENY
+                    denied_dec.verdict = Verdict.ALLOW
+                if self.audit_store:
+                    await self.audit_store.log_decision(
+                        session_id=call.session_id,
+                        server_id=call.server_id,
+                        direction="call",
+                        tool_name=call.tool_name,
+                        verdict=denied_dec.verdict.value,
+                        would_have=(denied_dec.would_have.value if denied_dec.would_have else None),
+                        rule=denied_dec.rule,
+                        reasons=denied_dec.reasons,
+                        scores=denied_dec.scores,
+                        latency_ms=0.0,
+                        args=call.arguments,
+                    )
+                return denied_dec
+
+            elif status == "pending":
+                reason = f"Tool '{call.tool_name}' on server '{call.server_id}' is pending approval"
+                denied_dec = Decision(
+                    verdict=Verdict.DENY,
+                    reasons=[reason],
+                    rule="registry:pending",
+                )
+                if self.config.mode == "shadow":
+                    denied_dec.would_have = Verdict.DENY
+                    denied_dec.verdict = Verdict.ALLOW
+                if self.audit_store:
+                    await self.audit_store.log_decision(
+                        session_id=call.session_id,
+                        server_id=call.server_id,
+                        direction="call",
+                        tool_name=call.tool_name,
+                        verdict=denied_dec.verdict.value,
+                        would_have=(denied_dec.would_have.value if denied_dec.would_have else None),
+                        rule=denied_dec.rule,
+                        reasons=denied_dec.reasons,
+                        scores=denied_dec.scores,
+                        latency_ms=0.0,
+                        args=call.arguments,
+                    )
+                return denied_dec
+
+        elif self.registry.is_server_known(call.server_id):
+            reason = f"Tool '{call.tool_name}' is not registered on server '{call.server_id}'"
+            denied_dec = Decision(
+                verdict=Verdict.DENY,
+                reasons=[reason],
+                rule="registry:unknown",
+            )
+            if self.config.mode == "shadow":
+                denied_dec.would_have = Verdict.DENY
+                denied_dec.verdict = Verdict.ALLOW
+            if self.audit_store:
+                await self.audit_store.log_decision(
+                    session_id=call.session_id,
+                    server_id=call.server_id,
+                    direction="call",
+                    tool_name=call.tool_name,
+                    verdict=denied_dec.verdict.value,
+                    would_have=(denied_dec.would_have.value if denied_dec.would_have else None),
+                    rule=denied_dec.rule,
+                    reasons=denied_dec.reasons,
+                    scores=denied_dec.scores,
+                    latency_ms=0.0,
+                    args=call.arguments,
+                )
+            return denied_dec
+
+        # 2. Run pluggable tool call checks
+        decision = await self._run_checks(self._tool_call_checks, call, session)
+        if self.audit_store:
+            await self.audit_store.log_decision(
+                session_id=call.session_id,
+                server_id=call.server_id,
+                direction="call",
+                tool_name=call.tool_name,
+                verdict=decision.verdict.value,
+                would_have=decision.would_have.value if decision.would_have else None,
+                rule=decision.rule,
+                reasons=decision.reasons,
+                scores=decision.scores,
+                latency_ms=decision.latency_ms,
+                args=call.arguments,
+                result=None,
+            )
+        return decision
 
     async def on_tool_result(self, result: ToolResult) -> Decision:
         """Evaluate an inbound tool execution result through registered checks."""
         session = self.get_or_create_session(result.session_id)
-        return await self._run_checks(self._tool_result_checks, result, session)
+        decision = await self._run_checks(self._tool_result_checks, result, session)
+        if self.audit_store:
+            payload_to_log = (
+                decision.modified_payload
+                if decision.verdict == Verdict.REDACT and decision.modified_payload is not None
+                else result.content
+            )
+            await self.audit_store.log_decision(
+                session_id=result.session_id,
+                server_id=result.server_id,
+                direction="result",
+                tool_name=result.tool_name,
+                verdict=decision.verdict.value,
+                would_have=decision.would_have.value if decision.would_have else None,
+                rule=decision.rule,
+                reasons=decision.reasons,
+                scores=decision.scores,
+                latency_ms=decision.latency_ms,
+                args=None,
+                result=payload_to_log,
+            )
+        return decision
+
+    async def flush(self) -> None:
+        """Flush pending audit store writes."""
+        if self.audit_store:
+            await self.audit_store.flush()
+
+    async def close(self) -> None:
+        """Flush and cleanly close engine resources and audit store."""
+        if self.audit_store:
+            await self.audit_store.close()
 
     async def _run_checks(
         self,

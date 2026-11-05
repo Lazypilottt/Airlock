@@ -1,0 +1,559 @@
+"""Standard I/O (stdio) MCP proxy transport."""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import os
+import signal
+import sys
+import uuid
+from collections.abc import Callable, Sequence
+from typing import Any
+
+from airlock.engine import Engine
+from airlock.models import ToolCall, ToolResult, Verdict
+
+_MAX_LINE_BYTES = 1_048_576
+_MAX_PENDING_REQUESTS = 4096
+
+
+def get_server_id(command: Sequence[str], name: str | None = None) -> str:
+    """Return explicit server name or a stable short SHA256 hash of the command."""
+    if name and name.strip():
+        return name.strip()
+    cmd_str = " ".join(command)
+    return hashlib.sha256(cmd_str.encode("utf-8")).hexdigest()[:12]
+
+
+def _log_warning(message: str) -> None:
+    """Write diagnostic warning to stderr without polluting protocol stdout."""
+    sys.stderr.write(f"[airlock] {' '.join(message.split())[:500]}\n")
+    sys.stderr.flush()
+
+
+def _default_stdout_write(line: str) -> None:
+    """Write protocol line to standard output and flush."""
+    sys.stdout.write(line + "\n")
+    sys.stdout.flush()
+
+
+def _write_error(
+    write_stdout: Callable[[str], None],
+    request_id: str | int | None,
+    code: int,
+    message: str,
+) -> None:
+    """Write a bounded JSON-RPC error response."""
+    write_stdout(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": code, "message": message},
+            }
+        )
+    )
+
+
+def _valid_request_id(value: object) -> bool:
+    return value is None or (isinstance(value, (str, int)) and not isinstance(value, bool))
+
+
+def _valid_jsonrpc_object(value: object) -> bool:
+    return isinstance(value, dict) and value.get("jsonrpc") == "2.0"
+
+
+def _track_request(
+    pending_requests: dict[Any, dict[str, Any]],
+    request_id: object,
+    details: dict[str, Any],
+) -> bool:
+    if not _valid_request_id(request_id) or request_id is None:
+        return False
+    if request_id in pending_requests or len(pending_requests) >= _MAX_PENDING_REQUESTS:
+        return False
+    pending_requests[request_id] = details
+    return True
+
+
+async def _client_to_server_relay(
+    stdin_reader: asyncio.StreamReader | None,
+    child_stdin: asyncio.StreamWriter,
+    write_stdout: Callable[[str], None],
+    engine: Engine,
+    session_id: str,
+    server_id: str,
+    pending_requests: dict[Any, dict[str, Any]],
+    stop_event: asyncio.Event,
+) -> None:
+    """Read lines from client stdin, apply outbound checks, and forward to server."""
+    while not stop_event.is_set():
+        if stdin_reader is not None:
+            raw_bytes = await stdin_reader.readline()
+            if not raw_bytes:
+                break
+            line = raw_bytes.decode("utf-8", errors="replace").rstrip("\r\n")
+        else:
+            raw_line = await asyncio.to_thread(sys.stdin.readline)
+            if not raw_line:
+                break
+            line = raw_line.rstrip("\r\n")
+
+        if len(line.encode("utf-8", errors="replace")) > _MAX_LINE_BYTES:
+            _log_warning("Client message exceeded the maximum size and was dropped")
+            _write_error(write_stdout, None, -32600, "Request is too large")
+            continue
+        if not line.strip():
+            continue
+
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            _log_warning("Client line is not valid JSON and was dropped")
+            _write_error(write_stdout, None, -32700, "Parse error")
+            continue
+
+        if not _valid_jsonrpc_object(msg):
+            _log_warning("Client message is not a JSON-RPC 2.0 object and was dropped")
+            _write_error(write_stdout, None, -32600, "Invalid Request")
+            continue
+
+        method = msg.get("method")
+        msg_id = msg.get("id")
+        if not _valid_request_id(msg_id):
+            _log_warning("Client request has an invalid JSON-RPC id and was dropped")
+            _write_error(write_stdout, None, -32600, "Invalid Request")
+            continue
+
+        if method == "tools/call":
+            params = msg.get("params")
+            if not isinstance(params, dict):
+                _write_error(write_stdout, msg_id, -32602, "Invalid params")
+                continue
+            tool_name = params.get("name", "")
+            arguments = params.get("arguments", {})
+            if not isinstance(tool_name, str) or not isinstance(arguments, dict):
+                _write_error(write_stdout, msg_id, -32602, "Invalid params")
+                continue
+
+            if msg_id is not None:
+                if not _track_request(
+                    pending_requests,
+                    msg_id,
+                    {
+                        "method": "tools/call",
+                        "tool_name": tool_name,
+                        "arguments": arguments,
+                    },
+                ):
+                    _write_error(write_stdout, msg_id, -32000, "Too many pending requests")
+                    continue
+
+            call = ToolCall(
+                session_id=session_id,
+                server_id=server_id,
+                tool_name=tool_name,
+                arguments=arguments,
+                request_id=msg_id if msg_id is not None else "no-id",
+            )
+            decision = await engine.on_tool_call(call)
+
+            if decision.verdict == Verdict.DENY:
+                # Do not forward; answer client directly with isError=True
+                reasons_text = (
+                    "; ".join(decision.reasons) if decision.reasons else "Blocked by policy"
+                )
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"Blocked by Airlock: {reasons_text}",
+                            }
+                        ],
+                        "isError": True,
+                    },
+                }
+                write_stdout(json.dumps(response))
+                pending_requests.pop(msg_id, None)
+                continue
+
+            elif decision.verdict == Verdict.ASK:
+                # Treat as DENY with reason "approval required" until approvals exist
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Blocked by Airlock: approval required",
+                            }
+                        ],
+                        "isError": True,
+                    },
+                }
+                write_stdout(json.dumps(response))
+                pending_requests.pop(msg_id, None)
+                continue
+
+            elif decision.verdict == Verdict.REDACT:
+                # Outbound redaction / payload modification
+                if decision.modified_payload is not None:
+                    if isinstance(decision.modified_payload, dict):
+                        params["arguments"] = decision.modified_payload
+                    msg["params"] = params
+                line = json.dumps(msg)
+
+        elif method == "tools/list":
+            if msg_id is not None:
+                if not _track_request(pending_requests, msg_id, {"method": "tools/list"}):
+                    _write_error(write_stdout, msg_id, -32000, "Too many pending requests")
+                    continue
+
+        else:
+            if msg_id is not None and method:
+                if not _track_request(pending_requests, msg_id, {"method": method}):
+                    _write_error(write_stdout, msg_id, -32000, "Too many pending requests")
+                    continue
+
+        child_stdin.write((line + "\n").encode("utf-8"))
+        await child_stdin.drain()
+
+
+async def _server_to_client_relay(
+    child_stdout: asyncio.StreamReader,
+    child_stdin: asyncio.StreamWriter,
+    write_stdout: Callable[[str], None],
+    engine: Engine,
+    session_id: str,
+    server_id: str,
+    pending_requests: dict[Any, dict[str, Any]],
+    stop_event: asyncio.Event,
+) -> None:
+    """Read lines from server stdout, apply inbound checks, and forward to client."""
+    internal_futures: dict[str, asyncio.Future[list[dict[str, Any]]]] = {}
+    bg_tasks: set[asyncio.Task[None]] = set()
+
+    while not stop_event.is_set():
+        raw_bytes = await child_stdout.readline()
+        if not raw_bytes:
+            break
+
+        line = raw_bytes.decode("utf-8", errors="replace").rstrip("\r\n")
+        if len(raw_bytes) > _MAX_LINE_BYTES:
+            _log_warning("Server message exceeded the maximum size and was dropped")
+            continue
+        if not line.strip():
+            continue
+
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            _log_warning("Server line is not valid JSON and was dropped")
+            continue
+
+        if not _valid_jsonrpc_object(msg):
+            _log_warning("Server message is not a JSON-RPC 2.0 object and was dropped")
+            continue
+
+        msg_id = msg.get("id")
+        method = msg.get("method")
+
+        # Check if this message is a response to an internal Airlock tools/list request
+        if msg_id is not None and str(msg_id) in internal_futures:
+            fut = internal_futures.pop(str(msg_id))
+            if not fut.done():
+                result_obj = msg.get("result", {})
+                raw_tools = result_obj.get("tools", []) if isinstance(result_obj, dict) else []
+                fut.set_result(raw_tools)
+            # NEVER forward internal responses to client stdout
+            continue
+
+        # Hook 4: notifications/tools/list_changed from the server
+        if method == "notifications/tools/list_changed":
+            _log_warning("notifications/tools/list_changed received from server")
+
+            # Send internal tools/list request to server, update registry, then forward
+            loop = asyncio.get_running_loop()
+            internal_id = f"__airlock_internal_list__{uuid.uuid4()}"
+            fut = loop.create_future()
+            internal_futures[internal_id] = fut
+
+            # Send internal request to server child
+            req_msg = {
+                "jsonrpc": "2.0",
+                "id": internal_id,
+                "method": "tools/list",
+                "params": {},
+            }
+            child_stdin.write((json.dumps(req_msg) + "\n").encode("utf-8"))
+            await child_stdin.drain()
+
+            async def _update_and_forward(
+                notification_line: str,
+                future: asyncio.Future[list[dict[str, Any]]],
+            ) -> None:
+                try:
+                    tools_data = await asyncio.wait_for(future, timeout=5.0)
+                    await engine.on_tools_listed(server_id, tools_data)
+                except Exception as exc:
+                    _log_warning(f"Failed to refresh registry on list_changed: {exc}")
+                write_stdout(notification_line)
+
+            task = asyncio.create_task(_update_and_forward(line, fut))
+            bg_tasks.add(task)
+            task.add_done_callback(bg_tasks.discard)
+            continue
+
+        # Match response to pending requests
+        if msg_id is not None and msg_id in pending_requests:
+            req_info = pending_requests.pop(msg_id)
+            req_method = req_info.get("method")
+
+            # Hook 2: server response to tools/call
+            if req_method == "tools/call" and "result" in msg:
+                result_obj = msg["result"]
+                if isinstance(result_obj, dict):
+                    content = result_obj.get("content", [])
+                    is_error = bool(result_obj.get("isError", False))
+                    structured_content = result_obj.get("structuredContent")
+                    if not isinstance(content, list) or not all(
+                        isinstance(item, dict) for item in content
+                    ):
+                        _log_warning("Server returned malformed tool-result content")
+                        msg["result"] = {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "Blocked by Airlock: malformed tool result",
+                                }
+                            ],
+                            "isError": True,
+                        }
+                        line = json.dumps(msg)
+                        write_stdout(line)
+                        continue
+                    if structured_content is not None and not isinstance(structured_content, dict):
+                        _log_warning("Server returned malformed structured tool content")
+                        msg["result"] = {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "Blocked by Airlock: malformed tool result",
+                                }
+                            ],
+                            "isError": True,
+                        }
+                        line = json.dumps(msg)
+                        write_stdout(line)
+                        continue
+
+                    tool_result = ToolResult(
+                        session_id=session_id,
+                        server_id=server_id,
+                        tool_name=req_info.get("tool_name", ""),
+                        request_id=msg_id,
+                        content=content if isinstance(content, list) else [],
+                        is_error=is_error,
+                        structured_content=(
+                            structured_content if isinstance(structured_content, dict) else None
+                        ),
+                    )
+                    decision = await engine.on_tool_result(tool_result)
+
+                    if decision.verdict == Verdict.DENY:
+                        reasons_text = (
+                            "; ".join(decision.reasons) if decision.reasons else "Blocked by policy"
+                        )
+                        msg["result"] = {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": f"Blocked by Airlock: {reasons_text}",
+                                }
+                            ],
+                            "isError": True,
+                        }
+                        line = json.dumps(msg)
+
+                    elif decision.verdict == Verdict.REDACT:
+                        if decision.modified_payload is not None:
+                            if (
+                                isinstance(decision.modified_payload, dict)
+                                and "content" in decision.modified_payload
+                            ):
+                                msg["result"] = decision.modified_payload
+                            elif isinstance(decision.modified_payload, list):
+                                msg["result"]["content"] = decision.modified_payload
+                            else:
+                                msg["result"]["content"] = [
+                                    {
+                                        "type": "text",
+                                        "text": str(decision.modified_payload),
+                                    }
+                                ]
+                        line = json.dumps(msg)
+
+            # Hook 3: server response to tools/list
+            elif req_method == "tools/list" and "result" in msg:
+                result_obj = msg["result"]
+                if isinstance(result_obj, dict) and "tools" in result_obj:
+                    raw_tools = result_obj["tools"]
+                    if isinstance(raw_tools, list):
+                        filtered_tools = await engine.on_tools_listed(server_id, raw_tools)
+                        result_obj["tools"] = [
+                            t.model_dump(
+                                by_alias=True,
+                                exclude={"server_id"},
+                                exclude_none=True,
+                            )
+                            for t in filtered_tools
+                        ]
+                        msg["result"] = result_obj
+                        line = json.dumps(msg)
+
+        write_stdout(line)
+
+
+async def run_stdio_proxy(
+    command: Sequence[str],
+    name: str | None = None,
+    engine: Engine | None = None,
+    stdin_reader: asyncio.StreamReader | None = None,
+    stdout_writer: Callable[[str], None] | None = None,
+) -> int:
+    """Run bidirectional stdio proxy between MCP client and child server."""
+    if not command:
+        raise ValueError("No command provided to wrap")
+
+    active_engine = engine if engine is not None else Engine()
+    server_id = get_server_id(command, name)
+    session_id = str(uuid.uuid4())
+    write_stdout = stdout_writer or _default_stdout_write
+
+    # Spawn child server process
+    child = await asyncio.create_subprocess_exec(
+        *command,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=sys.stderr,
+        env=os.environ,
+    )
+
+    if child.stdin is None or child.stdout is None:
+        raise RuntimeError("Failed to establish stdio pipes with child process")
+
+    # Connect to client stdin if not supplied
+    loop = asyncio.get_running_loop()
+    if stdin_reader is None:
+        try:
+            reader = asyncio.StreamReader()
+            protocol = asyncio.StreamReaderProtocol(reader)
+            await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+            active_stdin_reader: asyncio.StreamReader | None = reader
+        except Exception:
+            active_stdin_reader = None
+    else:
+        active_stdin_reader = stdin_reader
+
+    pending_requests: dict[Any, dict[str, Any]] = {}
+    stop_event = asyncio.Event()
+
+    # Signal handling
+    def _handle_signal(sig: int) -> None:
+        _log_warning(f"Received signal {sig}, terminating child process...")
+        try:
+            child.send_signal(sig)
+        except Exception:
+            pass
+        stop_event.set()
+
+    def _make_signal_handler(sig: signal.Signals) -> Callable[[], None]:
+        return lambda: _handle_signal(sig)
+
+    registered_signals: list[signal.Signals] = []
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _make_signal_handler(sig))
+            registered_signals.append(sig)
+        except (NotImplementedError, AttributeError, RuntimeError, ValueError):
+            pass
+
+    client_task = asyncio.create_task(
+        _client_to_server_relay(
+            stdin_reader=active_stdin_reader,
+            child_stdin=child.stdin,
+            write_stdout=write_stdout,
+            engine=active_engine,
+            session_id=session_id,
+            server_id=server_id,
+            pending_requests=pending_requests,
+            stop_event=stop_event,
+        )
+    )
+
+    server_task = asyncio.create_task(
+        _server_to_client_relay(
+            child_stdout=child.stdout,
+            child_stdin=child.stdin,
+            write_stdout=write_stdout,
+            engine=active_engine,
+            session_id=session_id,
+            server_id=server_id,
+            pending_requests=pending_requests,
+            stop_event=stop_event,
+        )
+    )
+
+    try:
+        # Wait until either side closes
+        _done, pending = await asyncio.wait(
+            [client_task, server_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        stop_event.set()
+
+        for t in pending:
+            t.cancel()
+
+        # Close child stdin
+        try:
+            if not child.stdin.is_closing():
+                child.stdin.close()
+                await child.stdin.wait_closed()
+        except Exception:
+            pass
+
+        # Wait for child process exit
+        try:
+            await asyncio.wait_for(child.wait(), timeout=3.0)
+        except TimeoutError:
+            try:
+                child.kill()
+                await child.wait()
+            except Exception:
+                pass
+
+    finally:
+        for sig in registered_signals:
+            try:
+                loop.remove_signal_handler(sig)
+            except Exception:
+                pass
+        try:
+            await active_engine.close()
+        except Exception:
+            pass
+
+    return child.returncode if child.returncode is not None else 0
+
+
+__all__ = [
+    "get_server_id",
+    "run_stdio_proxy",
+]

@@ -1,0 +1,43 @@
+version: core-v1
+rules:
+  - {id: instruction-override-ignore, description: Ignore previous instructions, pattern: '\bignore\s+(?:all\s+)?previous\s+instructions\b', applies_to: both, severity: high, score: 0.95}
+  - {id: instruction-override-disregard, description: Disregard system prompt, pattern: '\bdisregard\s+(?:your\s+)?system\s+prompt\b', applies_to: both, severity: high, score: 0.95}
+  - {id: instruction-override-forget, description: Forget prior rules, pattern: '\bforget\s+(?:all\s+)?(?:prior|previous)\s+(?:rules|instructions)\b', applies_to: both, severity: high, score: 0.9}
+  - {id: instruction-override-new, description: New instructions override, pattern: '\b(?:new|updated)\s+instructions?\s*:', applies_to: both, severity: medium, score: 0.75}
+  - {id: instruction-override-do-not-follow, description: Do not follow instructions, pattern: '\bdo\s+not\s+follow\s+(?:the\s+)?(?:above|previous)\b', applies_to: both, severity: high, score: 0.9}
+  - {id: fake-role-system-tag, description: Fake system XML role, pattern: '<system\b[^>]*>', applies_to: both, severity: high, score: 0.85}
+  - {id: fake-role-user-tag, description: Fake user XML role, pattern: '<user\b[^>]*>', applies_to: both, severity: medium, score: 0.7}
+  - {id: fake-role-inst, description: Fake instruction role, pattern: '\[/?INST\]', applies_to: both, severity: high, score: 0.85}
+  - {id: fake-role-system-heading, description: Fake system heading, pattern: '###\s*system\s*:', applies_to: both, severity: high, score: 0.85}
+  - {id: fake-role-assistant, description: Fake assistant marker, pattern: '###\s*(?:assistant|developer)\s*:', applies_to: both, severity: medium, score: 0.7}
+  - {id: urgency-secrecy-do-not-tell, description: Secrecy request, pattern: '\bdo\s+not\s+(?:tell|inform|show)\s+(?:the\s+)?user\b', applies_to: both, severity: high, score: 0.9}
+  - {id: urgency-secrecy-keep-secret, description: Keep action secret, pattern: '\bkeep\s+(?:this|it)\s+secret\b', applies_to: both, severity: high, score: 0.85}
+  - {id: urgency-secrecy-urgent, description: Urgent secret action, pattern: '\b(?:urgent|immediately|right\s+now).{0,80}\b(?:secret|silently|quietly)\b', applies_to: both, severity: medium, score: 0.75}
+  - {id: urgency-secrecy-no-disclosure, description: No disclosure instruction, pattern: '\bwithout\s+(?:disclosing|telling|notifying)\b', applies_to: both, severity: medium, score: 0.7}
+  - {id: tool-coax-send-email, description: Coax email tool call, pattern: '\bcall\s+the\s+send[_ -]?email\s+tool\b', applies_to: both, severity: high, score: 0.9}
+  - {id: tool-coax-use-tools, description: Coax arbitrary tools, pattern: '\buse\s+your\s+tools\s+to\b', applies_to: both, severity: high, score: 0.85}
+  - {id: tool-coax-execute, description: Coax command execution, pattern: '\b(?:execute|run)\s+(?:this\s+)?(?:command|tool)\b', applies_to: both, severity: high, score: 0.8}
+  - {id: tool-coax-send, description: Coax data transmission, pattern: '\bsend\s+(?:the|this|these)\s+(?:data|contents|results)\b', applies_to: both, severity: medium, score: 0.7}
+  - {id: credential-api-key, description: API key bait, keywords: [API key], applies_to: both, severity: high, score: 0.8}
+  - {id: credential-ssh-dir, description: SSH credential path, pattern: '~/?\.ssh\b', applies_to: both, severity: high, score: 0.85}
+  - {id: credential-env-file, description: Environment secret file, pattern: '(?:^|[^\w])\.env(?:[^\w]|$)', applies_to: both, severity: high, score: 0.8}
+  - {id: credential-id-rsa, description: RSA private key path, keywords: [id_rsa], applies_to: both, severity: high, score: 0.9}
+  - {id: credential-password, description: Password request, pattern: '\b(?:password|passwd|secret)\s*[:=]', applies_to: both, severity: medium, score: 0.7}
+  - {id: exfil-query-data, description: Data in URL query, pattern: 'https?://[^\s)]+[?&](?:data|text|content|payload|secret|token)=', applies_to: both, severity: high, score: 0.9}
+  - {id: exfil-long-query, description: Long URL query, pattern: 'https?://[^\s)]+\?[^\s)]{40,}', applies_to: both, severity: high, score: 0.85}
+  - {id: exfil-webhook, description: Webhook exfiltration, pattern: '\b(?:webhook|requestbin|pastebin|ngrok)\b', applies_to: both, severity: high, score: 0.8}
+  - {id: exfil-base64-param, description: Encoded query payload, pattern: '[?&][\w-]*(?:b64|base64|encoded)[\w-]*=', applies_to: both, severity: high, score: 0.85}
+  - {id: exfil-markdown-image, description: Markdown image exfiltration, pattern: '!\[[^\]]*\]\([^)]*\?[^\)]{24,}\)', applies_to: both, severity: high, score: 0.85}
+  - {id: tool-name-mcp-send, description: Foreign send tool name, keywords: [send_email], applies_to: both, severity: medium, score: 0.7}
+  - {id: tool-name-mcp-http, description: Foreign HTTP tool name, keywords: [http_request], applies_to: both, severity: medium, score: 0.7}
+  - {id: tool-name-mcp-shell, description: Foreign shell tool name, keywords: [run_shell], applies_to: both, severity: medium, score: 0.75}
+  - {id: tool-name-mcp-browser, description: Foreign browser tool name, keywords: [browser_navigate], applies_to: both, severity: low, score: 0.55}
+  - {id: tool-name-mcp-fetch, description: Foreign fetch tool name, keywords: [fetch_url], applies_to: both, severity: medium, score: 0.65}
+  - {id: prompt-injection-role, description: Pretend to be system, pattern: '\b(?:pretend|act)\s+as\s+(?:the\s+)?(?:system|developer)\b', applies_to: both, severity: high, score: 0.85}
+  - {id: prompt-injection-priority, description: Claim higher priority, pattern: '\b(?:highest|top)\s+priority\s+(?:instruction|message)\b', applies_to: both, severity: high, score: 0.8}
+  - {id: prompt-injection-policy, description: Override policy, pattern: '\boverride\s+(?:the\s+)?(?:safety|security|airlock)\s+(?:policy|rules?)\b', applies_to: both, severity: high, score: 0.9}
+  - {id: prompt-injection-reveal, description: Reveal hidden prompt, pattern: '\b(?:reveal|print|show)\s+(?:the\s+)?(?:system|hidden)\s+(?:prompt|instructions?)\b', applies_to: both, severity: high, score: 0.85}
+  - {id: dangerous-shell, description: Destructive shell command, pattern: '\b(?:rm\s+-rf|curl\s+[^ ]+\s*\|\s*(?:sh|bash))\b', applies_to: both, severity: high, score: 0.9}
+  - {id: dangerous-chmod, description: Dangerous permission change, pattern: '\bchmod\s+777\b', applies_to: both, severity: medium, score: 0.7}
+  - {id: instruction-override-jailbreak, description: Jailbreak request, keywords: [jailbreak], applies_to: both, severity: high, score: 0.8}
+  - {id: instruction-override-bypass, description: Bypass restrictions, pattern: '\b(?:bypass|disable)\s+(?:all\s+)?(?:restrictions|guardrails|safety)\b', applies_to: both, severity: high, score: 0.85}

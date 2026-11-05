@@ -13,6 +13,27 @@ class ConfigError(Exception):
     """Raised when configuration loading or validation fails."""
 
 
+class ClassifierConfig(BaseModel):
+    """Configuration for the optional L2 ONNX classifier."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    required: bool = False
+    model_name: Literal["22M", "86M"] = "22M"
+    cache_size: int = Field(default=1024, ge=0)
+    block_threshold: float = Field(default=0.8, ge=0, le=1)
+
+
+class ThresholdOverride(BaseModel):
+    """Per-source detector decision thresholds."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    redact_above: float | None = Field(default=None, ge=0, le=1)
+    block_above: float | None = Field(default=None, ge=0, le=1)
+
+
 def get_default_config_locations() -> tuple[Path, ...]:
     """Return default configuration search paths dynamically."""
     return (
@@ -31,6 +52,13 @@ class AirlockConfig(BaseModel):
     log_path: Path | None = None
     data_dir: Path = Field(default_factory=lambda: Path.home() / ".config" / "airlock")
     check_timeout_ms: int = Field(default=200, gt=0)
+    auto_approve_new_tools: bool = False
+    classifier: ClassifierConfig = Field(default_factory=ClassifierConfig)
+    redact_above: float = Field(default=0.5, ge=0, le=1)
+    block_above: float = Field(default=0.85, ge=0, le=1)
+    spotlight: bool = False
+    server_overrides: dict[str, ThresholdOverride] = Field(default_factory=dict)
+    tool_overrides: dict[str, ThresholdOverride] = Field(default_factory=dict)
 
     @field_validator("data_dir", "log_path", mode="before")
     @classmethod
@@ -99,7 +127,9 @@ def load_config(config_path: Path | str | None = None) -> AirlockConfig:
 
 __all__ = [
     "AirlockConfig",
+    "ClassifierConfig",
     "ConfigError",
+    "ThresholdOverride",
     "find_config_path",
     "get_default_config_locations",
     "load_config",

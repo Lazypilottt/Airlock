@@ -1,0 +1,1 @@
+Our email system sends a receipt after each purchase.

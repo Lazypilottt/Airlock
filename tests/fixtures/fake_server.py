@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from mcp.server.fastmcp import FastMCP
-except (ImportError, ModuleNotFoundError):
-    from mcp.server.mcpserver import MCPServer as FastMCP  # type: ignore[no-redef]
+    from mcp.server.mcpserver import MCPServer as FastMCP
+except ImportError:
+    from mcp.server.fastmcp import FastMCP  # type: ignore[attr-defined, no-redef]
 
 server = FastMCP("fake-server")
 PAGES_DIR = Path(__file__).parent / "pages"

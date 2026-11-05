@@ -1,0 +1,1 @@
+Our support system records the user's email address.

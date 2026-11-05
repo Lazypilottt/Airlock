@@ -7,7 +7,7 @@ A transparent, low-latency firewall for AI agents using Model Context Protocol (
 Airlock sits between an MCP client (such as Cursor or custom agent harnesses) and MCP servers as a transparent security proxy. It inspects and governs both outbound tool invocations and inbound tool execution results, protecting agents against prompt injection, data exfiltration, tool rug pulls, and unauthorized actions.
 
 - **Outbound protection**: Evaluates policy rules, tracks sensitive data taint flowing toward sink tools (e.g., email, HTTP, shell), and verifies honeytokens.
-- **Inbound protection**: Normalizes hidden or obfuscated text (Unicode smuggling, Base64 payloads, HTML comment injections), runs multi-tiered detector cascades, and safely redacts or blocks malicious tool outputs.
+- **Inbound protection**: Normalizes hidden or obfuscated text (Unicode smuggling, Base64 payloads, HTML comment inject ions), runs multi-tiered detector cascades, and safely redacts or blocks malicious tool outputs.
 - **Tool Integrity**: Pins cryptographic hashes of tool definitions (name, description, schema) and quarantines tools with suspicious changes (rug pulls).
 - **Audit & Forensics**: Records structured decisions and rationale into local SQLite storage, with support for both `shadow` (observation) and `enforce` (blocking) modes.
 
@@ -29,22 +29,93 @@ uv pip install airlock-mcp
 
 ## Quick start
 
-Check CLI capabilities:
+Install and initialize a local data directory:
 
 ```bash
-uv run airlock --help
+uv pip install -e .
+mkdir -p ~/.config/airlock
 ```
 
-Initialize default configurations:
+Wrap an MCP server. Everything after `--` is passed to the server; stdout
+remains reserved for MCP JSON-RPC:
 
 ```bash
-uv run airlock init
+uv run airlock wrap --name my-server -- python -m my_mcp_server
 ```
 
-Run in proxy mode:
+Inspect registered tools and approve a pending tool:
 
 ```bash
-uv run airlock serve
+uv run airlock tools list
+uv run airlock tools approve my-server fetch
+```
+
+Inspect recent decisions (previews are secret-masked):
+
+```bash
+uv run airlock logs --since 1h
+uv run airlock logs --verdict DENY --json
+```
+
+Use `--config path/to/airlock.yaml` with each command to select a
+configuration file. `airlock serve` and `airlock init` are reserved for a
+future standalone service/configuration workflow; `wrap` is the current proxy
+entry point.
+
+### Optional Prompt Guard 2 classifier
+
+The L2 classifier is optional and is unavailable until the gated Meta model
+has been authorized. Accept Meta's Llama license on Hugging Face, set
+`HF_TOKEN`, install the classifier extras, and export either model:
+
+```bash
+uv pip install -e '.[classifier]'
+export HF_TOKEN=...
+python scripts/export_promptguard.py --variant 22M
+# Use --variant 86M for the larger model.
+```
+
+Models are stored under `data_dir/models/`. By default, a missing classifier
+is logged once and L0/L1 continue; require it with:
+
+```yaml
+classifier:
+  required: true
+  cache_size: 1024
+```
+
+The benchmark can be run with `python -m bench.latency`.
+
+### AgentDojo benchmark harness
+
+Install the optional harness with `uv pip install -e '.[bench]'`. Run a cheap
+smoke benchmark with five tasks:
+
+```bash
+python -m bench.run --config none --model gpt-4o-mini-2024-07-18 --suites workspace --limit 5
+python -m bench.run --config promptguard --model gpt-4o-mini-2024-07-18 --suites workspace --limit 5
+python -m bench.run --config airlock-detect --model gpt-4o-mini-2024-07-18 --suites workspace --limit 5
+python -m bench.report bench/results/*.json
+```
+
+Hosted models require their provider credentials (`OPENAI_API_KEY` for the
+example model). AgentDojo commonly makes one or more calls per task; its task
+runner retries up to three times, so five tasks generally means roughly five
+to fifteen model calls before extra tool-loop turns.
+
+Result decisions use `redact_above: 0.5` and `block_above: 0.85` by default.
+Thresholds can be overridden for a server or tool:
+
+```yaml
+redact_above: 0.5
+block_above: 0.85
+server_overrides:
+  untrusted-search:
+    block_above: 0.75
+tool_overrides:
+  fetch:
+    redact_above: 0.4
+spotlight: true
 ```
 
 ## How it works

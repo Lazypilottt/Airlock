@@ -20,12 +20,12 @@ class Verdict(StrEnum):
 class ToolDef(BaseModel):
     """Definition of an MCP tool exposed by an MCP server."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     server_id: str
     name: str
     description: str
-    input_schema: dict[str, Any] = Field(default_factory=dict)
+    input_schema: dict[str, Any] = Field(default_factory=dict, alias="inputSchema")
     annotations: dict[str, Any] | None = None
 
 

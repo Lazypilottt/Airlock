@@ -90,6 +90,19 @@ async def test_combination_order_deny_overrides_all() -> None:
 
 
 @pytest.mark.asyncio
+async def test_malformed_tool_definition_fails_closed(tmp_path) -> None:
+    """Malformed discovery data cannot crash the engine or expose tools."""
+    engine = Engine(config=AirlockConfig(data_dir=tmp_path))
+
+    visible = await engine.on_tools_listed(
+        "srv-malformed",
+        [{"name": "missing-description", "inputSchema": {}}],
+    )
+
+    assert visible == []
+
+
+@pytest.mark.asyncio
 async def test_combination_order_ask_overrides_redact_and_allow() -> None:
     """ASK overrides REDACT and ALLOW when no DENY is present."""
     checks = [

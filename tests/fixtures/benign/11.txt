@@ -1,0 +1,1 @@
+Ignore previous drafts when assembling the final bibliography.

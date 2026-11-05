@@ -1,0 +1,1 @@
+Ignore the noise in the recording when preparing the transcript.

@@ -15,6 +15,15 @@ dependencies = [
 [project.scripts]
 airlock = "airlock.cli:app"
 
+[project.optional-dependencies]
+classifier = [
+    "optimum[onnxruntime]>=1.24.0",
+    "transformers>=4.45.0",
+]
+bench = [
+    "agentdojo>=0.1.31",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -53,6 +62,10 @@ ignore = []
 python_version = "3.12"
 strict = true
 packages = ["airlock"]
+
+[[tool.mypy.overrides]]
+module = "tests.fixtures.*"
+disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]
 minversion = "8.0"
