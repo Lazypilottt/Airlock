@@ -3,12 +3,15 @@
 These are explicit limitations of the current release and are not silently
 treated as implemented features.
 
-## Missing outbound policy layers
+## Outbound policy layers
 
-The default engine currently has no policy, taint-tracking, or honeytoken
-checks. Registry approval and the configured pluggable checks are the only
-outbound controls. A deployment that requires sink-tool protection must add
-those checks before production use.
+The default engine (`airlock.engine_factory.build_engine`) runs taint tracking
+on calls to tools labelled `sink`. It does not yet run the policy engine or the
+honeytoken check (planned for v0.2).
+
+Each `airlock wrap` process keeps its own taint table, so a value read through
+one wrapped server and sent through a different wrapped server is not caught.
+Flows within a single server are caught.
 
 ## Resource limits outside stdio
 

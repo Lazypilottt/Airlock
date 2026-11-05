@@ -10,6 +10,7 @@ dependencies = [
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "mcp>=1.0.0",
+    "pyahocorasick>=2.1",
 ]
 
 [project.scripts]
@@ -65,6 +66,11 @@ ignore = []
 python_version = "3.12"
 strict = true
 packages = ["airlock"]
+
+[[tool.mypy.overrides]]
+# pyahocorasick is a C extension and ships no type stubs.
+module = "ahocorasick"
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "tests.fixtures.*"

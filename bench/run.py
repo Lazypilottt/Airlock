@@ -11,9 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from airlock.config import AirlockConfig
-from airlock.detect.cascade import CascadeResultCheck
 from airlock.detect.classifier import PromptGuardClassifier
-from airlock.engine import Engine
+from airlock.engine_factory import build_engine
 
 
 def _versions() -> dict[str, str]:
@@ -41,9 +40,11 @@ def _pipeline(model: str, config_name: str) -> Any:
     else:
         config = AirlockConfig()
         if config_name == "promptguard":
-            engine = Engine(
-                config=config,
-                tool_result_checks=[
+            engine = build_engine(
+                config,
+                detectors=False,
+                flow=False,
+                extra_tool_result_checks=[
                     PromptGuardResultCheck(
                         PromptGuardClassifier(config.data_dir, config.classifier),
                         block_threshold=config.block_above,
@@ -51,7 +52,7 @@ def _pipeline(model: str, config_name: str) -> Any:
                 ],
             )
         else:
-            engine = Engine(config=config, tool_result_checks=[CascadeResultCheck(config)])
+            engine = build_engine(config, detectors=True, flow=False)
         adapter = AirlockAgentDojoAdapter(engine)
         elements = [adapter, ToolsExecutor(), adapter, llm]
 

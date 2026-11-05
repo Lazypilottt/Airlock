@@ -19,6 +19,8 @@ from airlock.models import Decision, ToolCall, ToolDef, ToolResult, Verdict
 from airlock.registry.checks import DescriptionCheck, StubDescriptionCheck
 from airlock.registry.labels import LabelResolver, ToolLabels
 from airlock.registry.store import ToolRegistry
+from airlock.taint.table import TaintTable
+from airlock.taint.tracker import TrustedValues
 
 VERDICT_SEVERITY: dict[Verdict, int] = {
     Verdict.ALLOW: 1,
@@ -31,10 +33,15 @@ VERDICT_SEVERITY: dict[Verdict, int] = {
 class Session:
     """Holds per-session state across tool calls and results."""
 
-    def __init__(self, session_id: str) -> None:
+    def __init__(self, session_id: str, taint: TaintTable | None = None) -> None:
         self.session_id: str = session_id
         self.state: dict[str, Any] = {}
         self.created_at: float = time.time()
+        # Number of tool calls seen so far; used to say "N calls ago" in taint reasons.
+        self.call_count: int = 0
+        self.taint: TaintTable = taint if taint is not None else TaintTable()
+        # Values this session's user supplied themselves (SDK mode); never tainted.
+        self.trusted: TrustedValues = TrustedValues()
 
 
 @runtime_checkable
@@ -115,15 +122,49 @@ class Engine:
         )
 
     def labels_for(self, server_id: str, tool_name: str) -> ToolLabels:
-        """Return a tool's stored labels; tools never listed have no labels."""
+        """Return a tool's stored labels.
+
+        A tool that was never listed (the client called it without listing, or
+        the server has not been seen) is resolved from its name alone, so packs,
+        user overrides and the name heuristic still apply.
+        """
         stored = self.registry.get_labels(server_id, tool_name)
-        return stored if stored is not None else ToolLabels()
+        if stored is not None:
+            return stored
+        return self.label_resolver.resolve(
+            server_id, ToolDef(server_id=server_id, name=tool_name, description="")
+        )
 
     def get_or_create_session(self, session_id: str) -> Session:
         """Retrieve existing session or instantiate a new one."""
         if session_id not in self.sessions:
-            self.sessions[session_id] = Session(session_id)
+            taint = self.config.taint
+            self.sessions[session_id] = Session(
+                session_id,
+                taint=TaintTable(
+                    max_entries=taint.max_entries,
+                    ttl_seconds=taint.ttl_seconds,
+                    min_token_length=taint.min_token_length,
+                    match_domains=taint.match_domains,
+                ),
+            )
         return self.sessions[session_id]
+
+    def check_names(self) -> dict[str, list[str]]:
+        """Names of the registered checks per hook, in the order they run."""
+
+        def _names(checks: Sequence[Any]) -> list[str]:
+            return [
+                str(getattr(check, "name", getattr(check, "__name__", type(check).__name__)))
+                for check in checks
+            ]
+
+        return {
+            "tool_call": _names(self._tool_call_checks),
+            "tool_result": _names(self._tool_result_checks),
+            "tools_listed": _names(self._tools_listed_checks),
+            "description": _names(self._description_checks),
+        }
 
     def add_tool_call_check(self, check: Any) -> None:
         """Register a pluggable check for outbound tool calls."""
@@ -234,6 +275,7 @@ class Engine:
     async def on_tool_call(self, call: ToolCall) -> Decision:
         """Evaluate an outbound tool call through registry status and registered checks."""
         session = self.get_or_create_session(call.session_id)
+        session.call_count += 1
 
         # 1. Enforce Tool Registry status (quarantined/pending tools denied)
         tool_record = self.registry.get_tool(call.server_id, call.tool_name)

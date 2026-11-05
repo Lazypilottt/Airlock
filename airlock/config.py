@@ -34,6 +34,18 @@ class ThresholdOverride(BaseModel):
     block_above: float | None = Field(default=None, ge=0, le=1)
 
 
+class TaintConfig(BaseModel):
+    """Settings for the per-session taint tracker."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    max_entries: int = Field(default=10_000, gt=0)
+    ttl_seconds: float = Field(default=3600.0, ge=0, description="0 disables expiry.")
+    min_token_length: int = Field(default=16, ge=8)
+    match_domains: bool = True
+
+
 LabelName = Literal["source_untrusted", "source_secret", "sink"]
 ArgRoleName = Literal["destination", "content", "path", "code"]
 
@@ -75,6 +87,8 @@ class AirlockConfig(BaseModel):
     server_overrides: dict[str, ThresholdOverride] = Field(default_factory=dict)
     tool_overrides: dict[str, ThresholdOverride] = Field(default_factory=dict)
     labels: list[LabelOverride] = Field(default_factory=list)
+    taint: TaintConfig = Field(default_factory=TaintConfig)
+    trusted_values: list[str] = Field(default_factory=list)
 
     @field_validator("data_dir", "log_path", mode="before")
     @classmethod
@@ -146,6 +160,7 @@ __all__ = [
     "ClassifierConfig",
     "ConfigError",
     "LabelOverride",
+    "TaintConfig",
     "ThresholdOverride",
     "find_config_path",
     "get_default_config_locations",

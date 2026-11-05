@@ -184,6 +184,9 @@ async def _client_to_server_relay(
 
             elif decision.verdict == Verdict.ASK:
                 # Treat as DENY with reason "approval required" until approvals exist
+                ask_text = "Blocked by Airlock: approval required"
+                if decision.reasons:
+                    ask_text += f" ({'; '.join(decision.reasons)})"
                 response = {
                     "jsonrpc": "2.0",
                     "id": msg_id,
@@ -191,7 +194,7 @@ async def _client_to_server_relay(
                         "content": [
                             {
                                 "type": "text",
-                                "text": "Blocked by Airlock: approval required",
+                                "text": ask_text,
                             }
                         ],
                         "isError": True,

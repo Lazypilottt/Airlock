@@ -15,7 +15,7 @@ from rich.table import Table
 
 from airlock.audit.store import AuditStore
 from airlock.config import load_config
-from airlock.engine import Engine
+from airlock.engine_factory import build_engine
 from airlock.registry.store import ToolRegistry, labels_from_row
 from airlock.transport.stdio import run_stdio_proxy
 
@@ -63,7 +63,7 @@ def wrap(
         raise typer.Exit(code=1)
 
     cfg = load_config(config)
-    engine = Engine(config=cfg)
+    engine = build_engine(cfg)
 
     exit_code = asyncio.run(run_stdio_proxy(full_cmd, name=name, engine=engine))
     raise typer.Exit(code=exit_code)
