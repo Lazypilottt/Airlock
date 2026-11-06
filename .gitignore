@@ -58,3 +58,8 @@ htmlcov/
 *.swo
 *~
 .DS_Store
+
+# Generated classifier data, training runs and benchmark results
+/data/
+/runs/
+/bench/results/

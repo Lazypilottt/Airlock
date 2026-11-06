@@ -6,23 +6,50 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 
 class ConfigError(Exception):
     """Raised when configuration loading or validation fails."""
 
 
+ClassifierModel = Literal["airlock-v1", "promptguard-22m", "promptguard-86m"]
+
+
 class ClassifierConfig(BaseModel):
-    """Configuration for the optional L2 ONNX classifier."""
+    """Configuration for the optional L2 ONNX classifier.
+
+    ``classifier: airlock-v1`` (a bare model name) is shorthand for
+    ``classifier: {model: airlock-v1}``. The model is loaded from
+    ``data_dir/models/<model>/model.int8.onnx``.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
     required: bool = False
-    model_name: Literal["22M", "86M"] = "22M"
+    model: ClassifierModel = "promptguard-22m"
+    model_name: Literal["22M", "86M"] | None = Field(
+        default=None, description="Deprecated: use model (promptguard-22m / promptguard-86m)."
+    )
     cache_size: int = Field(default=1024, ge=0)
     block_threshold: float = Field(default=0.8, ge=0, le=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _shorthand_and_legacy(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return {"model": value}
+        if isinstance(value, dict) and value.get("model_name") and "model" not in value:
+            return {**value, "model": f"promptguard-{str(value['model_name']).lower()}"}
+        return value
 
 
 class ThresholdOverride(BaseModel):
@@ -176,6 +203,7 @@ __all__ = [
     "AirlockConfig",
     "ApprovalConfig",
     "ClassifierConfig",
+    "ClassifierModel",
     "ConfigError",
     "LabelOverride",
     "TaintConfig",

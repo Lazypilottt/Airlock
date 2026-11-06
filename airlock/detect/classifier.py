@@ -1,4 +1,4 @@
-"""Lazy ONNX Runtime adapter for Llama Prompt Guard 2."""
+"""Lazy ONNX Runtime adapter for the L2 classifier (Prompt Guard 2 or airlock-v1)."""
 
 from __future__ import annotations
 
@@ -37,7 +37,11 @@ class Window:
 
 
 class PromptGuardClassifier:
-    """Lazy, cached Prompt Guard 2 classifier."""
+    """Lazy, cached sequence classifier: Prompt Guard 2 or Airlock's own ``airlock-v1``.
+
+    Both are exported the same way (ONNX int8 plus tokenizer files) and use
+    class index 1 for "injection".
+    """
 
     def __init__(
         self,
@@ -55,7 +59,7 @@ class PromptGuardClassifier:
 
     @property
     def model_dir(self) -> Path:
-        return self.data_dir / "models" / f"promptguard-{self.config.model_name.lower()}"
+        return self.data_dir / "models" / self.config.model
 
     def _log_unavailable(self, reason: str) -> None:
         if not self._unavailable_logged:

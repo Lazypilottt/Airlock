@@ -216,6 +216,18 @@ classifier:
 
 The benchmark can be run with `python -m bench.latency`.
 
+### Choosing the classifier
+
+The optional L2 classifier is Prompt Guard 2 by default. Airlock's own model,
+trained on tool-output-style data, is selected with:
+
+```yaml
+classifier: airlock-v1          # or promptguard-22m (default), promptguard-86m
+```
+
+Models load from `data_dir/models/<name>/model.int8.onnx`. How to build the
+dataset and train `airlock-v1` on a free GPU notebook: `docs/training.md`.
+
 ### AgentDojo benchmark harness
 
 Install the optional harness with `uv pip install -e '.[bench]'`. Run a cheap
