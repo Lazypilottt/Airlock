@@ -40,6 +40,8 @@ class LabelOrigin(StrEnum):
 
     USER = "user"
     PACK = "pack"
+    ACCEPTED = "accepted"  # auto-label reviewed and accepted (`airlock tools review`)
+    PROPOSED = "proposed"  # auto-label not reviewed yet: added to the heuristic's labels
     INFERRED = "inferred"
     NONE = "none"
 
@@ -454,8 +456,19 @@ def load_label_packs(directory: Path | str | None = None) -> list[LabelPack]:
     return [LabelPack.load(path) for path in sorted(root.glob("*.yaml"))]
 
 
+class ReviewedLabels(Protocol):
+    """Lookup of auto-label records (``airlock.registry.autolabel.LabelStore``)."""
+
+    def get(self, tool_hash: str) -> dict[str, Any] | None: ...
+
+
 class LabelResolver:
-    """Resolve a tool's labels with precedence user > pack > heuristic."""
+    """Resolve a tool's labels: user > pack > auto-label (accepted, or proposed) > heuristic.
+
+    A proposed auto-label is merged with the heuristic (labels can be added,
+    never removed); an accepted one is used as reviewed; a rejected one is
+    ignored. Proposals below ``min_confidence`` are ignored too.
+    """
 
     def __init__(
         self,
@@ -466,6 +479,48 @@ class LabelResolver:
         self.packs: list[LabelPack] = list(packs) if packs is not None else load_label_packs()
         self.user_entries: list[LabelOverride] = list(user_entries or [])
         self.use_heuristics = use_heuristics
+        self.auto_labels: ReviewedLabels | None = None
+        self.min_confidence = 0.0
+
+    def has_explicit(self, server_id: str, tool_name: str) -> bool:
+        """True when a user entry or a label pack covers the tool."""
+        if self._user_entry(server_id, tool_name) is not None:
+            return True
+        return any(
+            pack.matches_server(server_id) and _find_entry(pack.tools, tool_name) is not None
+            for pack in self.packs
+        )
+
+    def _auto(self, tool: ToolDef, heuristic: ToolLabels) -> ToolLabels | None:
+        if self.auto_labels is None:
+            return None
+        from airlock.registry.store import compute_tool_hash
+
+        record = self.auto_labels.get(compute_tool_hash(tool)[0])
+        if record is None or record.get("status") == "rejected":
+            return None
+        valid_labels = {item.value for item in Label}
+        valid_roles = {item.value for item in ArgRole}
+        labels = frozenset(Label(x) for x in record.get("labels", []) if x in valid_labels)
+        args = {
+            str(name): ArgRole(role)
+            for name, role in (record.get("args") or {}).items()
+            if role in valid_roles
+        }
+        source = f"{record.get('provider', 'auto')}:{record.get('model', '')}"
+        if record.get("status") == "accepted":
+            return ToolLabels(
+                labels=labels, origin=LabelOrigin.ACCEPTED, source=source, arg_roles=args
+            )
+        if float(record.get("confidence", 0.0)) < self.min_confidence:
+            return None
+        return ToolLabels(
+            labels=labels | heuristic.labels,
+            origin=LabelOrigin.PROPOSED,
+            source=source,
+            arg_roles={**args, **dict(heuristic.arg_roles)},
+            reasons=(str(record.get("rationale", "")),),
+        )
 
     def _user_entry(self, server_id: str, tool_name: str) -> LabelOverride | None:
         candidates = [entry for entry in self.user_entries if _glob(server_id, entry.server)]
@@ -492,9 +547,11 @@ class LabelResolver:
                     source=pack.name,
                     arg_roles=dict(entry.args),
                 )
-        if self.use_heuristics:
-            return infer_labels(tool)
-        return ToolLabels()
+        heuristic = infer_labels(tool) if self.use_heuristics else ToolLabels()
+        auto = self._auto(tool, heuristic)
+        if auto is not None:
+            return auto
+        return heuristic
 
 
 __all__ = [
@@ -505,6 +562,7 @@ __all__ = [
     "LabelOrigin",
     "LabelPack",
     "LabelResolver",
+    "ReviewedLabels",
     "ToolLabels",
     "builtin_label_packs_dir",
     "infer_labels",

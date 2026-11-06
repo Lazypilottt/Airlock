@@ -49,6 +49,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+autolabel = [
+    { name = "anthropic" },
+]
 bench = [
     { name = "agentdojo" },
 ]
@@ -77,6 +80,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "agentdojo", marker = "extra == 'bench'", specifier = ">=0.1.31" },
+    { name = "anthropic", marker = "extra == 'autolabel'", specifier = ">=1.0" },
     { name = "httpx2", specifier = ">=2.16" },
     { name = "mcp", specifier = ">=1.0.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otel'", specifier = ">=1.27" },
@@ -91,7 +95,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12.0" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
-provides-extras = ["classifier", "bench", "slack", "otel"]
+provides-extras = ["classifier", "bench", "slack", "autolabel", "otel"]
 
 [package.metadata.requires-dev]
 dev = [

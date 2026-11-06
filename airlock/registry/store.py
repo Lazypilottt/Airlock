@@ -406,6 +406,30 @@ class ToolRegistry:
         finally:
             conn.close()
 
+    def set_labels(self, server_id: str, tool_name: str, labels: ToolLabels) -> bool:
+        """Replace a tool's stored labels (after a review); False if the tool is unknown."""
+        record = labels.to_record()
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                """
+                UPDATE tools SET labels = ?, label_origin = ?, label_source = ?, arg_roles = ?
+                WHERE server_id = ? AND tool_name = ?
+                """,
+                (
+                    json.dumps(record["labels"]),
+                    record["origin"],
+                    record["source"],
+                    json.dumps(record["arg_roles"]),
+                    server_id,
+                    tool_name,
+                ),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
     def reset_server(self, server_id: str) -> int:
         """Delete all tools for server_id so next list is treated as first use (TOFU)."""
         conn = self._get_connection()

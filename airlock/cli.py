@@ -396,6 +396,181 @@ def tools_approve(
         print(f"Approved tool '{tool}' on server '{server}'.")
 
 
+def _refresh_registry_labels(cfg: AirlockConfig, server: str, tool: str) -> None:
+    """Re-resolve a tool's labels after a review and store them in the registry."""
+    from airlock.models import ToolDef
+    from airlock.registry.autolabel import LabelStore
+    from airlock.registry.labels import LabelResolver
+
+    registry = ToolRegistry(cfg.data_dir / "registry.db")
+    row = registry.get_tool(server, tool)
+    if row is None:
+        return
+    definition = json.loads(row["definition_json"])
+    tool_def = ToolDef.model_validate(
+        {
+            "server_id": server,
+            "name": definition.get("name", tool),
+            "description": definition.get("description") or "",
+            "inputSchema": definition.get("input_schema") or {},
+            "annotations": definition.get("annotations"),
+        }
+    )
+    resolver = LabelResolver(user_entries=cfg.labels)
+    resolver.auto_labels = LabelStore(cfg.data_dir / "auto-labels.json")
+    resolver.min_confidence = cfg.auto_label.min_confidence
+    registry.set_labels(server, tool, resolver.resolve(server, tool_def))
+
+
+_LABEL_CHOICES = ("source_untrusted", "source_secret", "sink")
+_ROLE_CHOICES = ("destination", "content", "path", "code")
+
+
+def _parse_edit(labels_text: str, args_text: str) -> tuple[list[str], dict[str, str]]:
+    labels = [item.strip() for item in labels_text.split(",") if item.strip()]
+    for label in labels:
+        if label not in _LABEL_CHOICES:
+            raise ValueError(f"unknown label {label!r} (use {', '.join(_LABEL_CHOICES)})")
+    args: dict[str, str] = {}
+    for item in (part.strip() for part in args_text.split(",")):
+        if not item:
+            continue
+        name, _, role = item.partition("=")
+        if role.strip() not in _ROLE_CHOICES:
+            raise ValueError(f"unknown role in {item!r} (use {', '.join(_ROLE_CHOICES)})")
+        args[name.strip()] = role.strip()
+    return labels, args
+
+
+@tools_app.command(name="review")
+def tools_review(
+    server: Annotated[
+        str | None, typer.Option("--server", "-s", help="Only this server's proposals.")
+    ] = None,
+    accept_all: Annotated[
+        bool, typer.Option("--accept-all", help="Accept every proposal without asking.")
+    ] = False,
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to airlock.yaml configuration file."),
+    ] = None,
+) -> None:
+    """Accept, edit or reject auto-labelling proposals."""
+    from airlock.approve.terminal import printable
+    from airlock.registry.autolabel import LabelStore
+
+    cfg = load_config(config)
+    store = LabelStore(cfg.data_dir / "auto-labels.json")
+    pending = store.records(server=server, status="proposed")
+    if not pending:
+        print("No proposed labels to review.")
+        return
+    for tool_hash, record in pending:
+        name = f"{record.get('server')}.{record.get('tool')}"
+        args = ", ".join(f"{k}={v}" for k, v in (record.get("args") or {}).items()) or "-"
+        print(
+            f"\n{printable(name, 120)}  (proposed by {printable(str(record.get('provider')), 40)}:"
+            f"{printable(str(record.get('model')), 60)}, "
+            f"confidence {float(record.get('confidence', 0)):.2f})\n"
+            f"  labels: {', '.join(record.get('labels') or []) or 'none'}\n"
+            f"  args:   {printable(args, 300)}\n"
+            f"  why:    {printable(str(record.get('rationale', '')), 200)}"
+        )
+        choice = (
+            "a"
+            if accept_all
+            else typer.prompt("[a]ccept, [e]dit, [r]eject, [s]kip", default="s").strip().lower()[:1]
+        )
+        if choice == "a":
+            store.review(tool_hash, "accepted")
+        elif choice == "e":
+            labels_text = typer.prompt(
+                "labels (comma separated; empty for none)",
+                default=",".join(record.get("labels") or []),
+                show_default=True,
+            )
+            args_text = typer.prompt(
+                "sink arguments as name=role (comma separated; empty for none)",
+                default=",".join(f"{k}={v}" for k, v in (record.get("args") or {}).items()),
+                show_default=True,
+            )
+            try:
+                labels, edited_args = _parse_edit(labels_text, args_text)
+            except ValueError as exc:
+                print(f"Skipped: {exc}")
+                continue
+            store.review(tool_hash, "accepted", labels=labels, args=edited_args)
+        elif choice == "r":
+            store.review(tool_hash, "rejected")
+        else:
+            print("Skipped.")
+            continue
+        _refresh_registry_labels(cfg, str(record.get("server")), str(record.get("tool")))
+        print(f"{name}: {'rejected' if choice == 'r' else 'accepted'}.")
+
+
+@tools_app.command(name="export-pack")
+def tools_export_pack(
+    server: Annotated[str, typer.Argument(help="Server whose accepted labels to export.")],
+    out: Annotated[
+        Path | None, typer.Option("--out", "-o", help="Write here (never overwrites).")
+    ] = None,
+    pack_name: Annotated[str | None, typer.Option("--name", help="Pack name.")] = None,
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to airlock.yaml configuration file."),
+    ] = None,
+) -> None:
+    """Write accepted auto-labels for a server as a label pack YAML."""
+    import yaml
+
+    from airlock.registry.autolabel import LabelStore
+    from airlock.registry.labels import LabelPack
+
+    cfg = load_config(config)
+    accepted = LabelStore(cfg.data_dir / "auto-labels.json").records(
+        server=server, status="accepted"
+    )
+    if not accepted:
+        sys.stderr.write(
+            f"Error: no accepted labels for server '{server}'. "
+            "Review proposals with `airlock tools review`.\n"
+        )
+        raise typer.Exit(code=1)
+    tools = []
+    for _, record in accepted:
+        entry: dict[str, object] = {
+            "tool": record["tool"],
+            "labels": list(record.get("labels") or []),
+        }
+        if record.get("args"):
+            entry["args"] = dict(record["args"])
+        tools.append(entry)
+    pack = {
+        "name": pack_name or server,
+        "description": f"Labels for the {server} MCP server, reviewed with airlock tools review",
+        "source": "",
+        "servers": [server],
+        "tools": tools,
+    }
+    LabelPack.model_validate(pack)
+    text = (
+        f"# Label pack for {server}, written by `airlock tools export-pack`.\n"
+        "# Fill in `source` (the server's repository) and check each entry before sharing.\n"
+        + yaml.safe_dump(pack, sort_keys=False, allow_unicode=True)
+    )
+    if out is None:
+        sys.stdout.write(text)
+        return
+    try:
+        with out.open("x", encoding="utf-8") as handle:
+            handle.write(text)
+    except FileExistsError as exc:
+        sys.stderr.write(f"Error: {out} already exists; not overwriting.\n")
+        raise typer.Exit(code=1) from exc
+    print(f"Wrote {out} ({len(tools)} tools).")
+
+
 @tools_app.command(name="reset")
 def tools_reset(
     server: Annotated[str, typer.Argument(help="Server ID to reset.")],

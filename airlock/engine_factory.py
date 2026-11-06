@@ -30,6 +30,32 @@ def load_policy(config: AirlockConfig) -> PolicySource:
     return PolicySource(config.policy if config.policy is not None else default_policy_path())
 
 
+def build_autolabeler(config: AirlockConfig, store: Any) -> Any:
+    """The labeller for ``auto_label`` (provider chosen in config)."""
+    from airlock.registry.autolabel import (
+        AnthropicProvider,
+        AutoLabeler,
+        OpenAICompatibleProvider,
+    )
+
+    settings = config.auto_label
+    provider: Any
+    if settings.provider == "anthropic":
+        provider = AnthropicProvider(
+            settings.model or "claude-opus-5-5",
+            settings.api_key_env or "ANTHROPIC_API_KEY",
+            settings.timeout_seconds,
+        )
+    else:
+        provider = OpenAICompatibleProvider(
+            settings.model or "",
+            settings.base_url,
+            settings.api_key_env or "OPENAI_API_KEY",
+            settings.timeout_seconds,
+        )
+    return AutoLabeler(provider, store, timeout=settings.timeout_seconds)
+
+
 def default_approver(config: AirlockConfig) -> Approver:
     """Slack when ``slack.channel`` is set, else the terminal (if ``approvals.terminal``).
 
@@ -116,6 +142,14 @@ def build_engine(
         engine.add_tool_call_check(TaintCheck(cfg, engine.labels_for))
     if detectors:
         engine.add_tool_result_check(CascadeResultCheck(cfg))
+    from airlock.registry.autolabel import LabelStore
+
+    # Reviewed and proposed auto-labels apply whenever they exist; new ones are
+    # only requested when auto_label is enabled.
+    engine.label_resolver.auto_labels = LabelStore(cfg.data_dir / "auto-labels.json")
+    engine.label_resolver.min_confidence = cfg.auto_label.min_confidence
+    if cfg.auto_label.enabled:
+        engine.autolabeler = build_autolabeler(cfg, engine.label_resolver.auto_labels)
     if cfg.otel.enabled:
         from airlock.telemetry import setup_otlp
 
@@ -127,4 +161,4 @@ def build_engine(
     return engine
 
 
-__all__ = ["build_engine", "default_approver", "load_policy"]
+__all__ = ["build_autolabeler", "build_engine", "default_approver", "load_policy"]

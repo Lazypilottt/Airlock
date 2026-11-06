@@ -276,6 +276,35 @@ With the `otel` extra, every decision becomes a span (`airlock.tool`,
 `airlock.server`, `airlock.verdict`, `airlock.rule`, top scores, latency) and
 increments the `airlock.decisions` counter by verdict.
 
+### Auto-labelling unknown tools
+
+Tools that no label pack or `labels:` entry covers get labels from the name
+heuristic. With `auto_label` on, a model is also asked; only the tool's name,
+description and input schema are sent.
+
+```yaml
+auto_label:
+  enabled: true
+  provider: anthropic            # or openai (any OpenAI-compatible endpoint)
+  model: claude-opus-5-5         # required for openai
+  api_key_env: ANTHROPIC_API_KEY # read from the environment
+  min_confidence: 0.6
+```
+
+The description is treated as untrusted: it is JSON-escaped between
+delimiters with a random nonce, and the answer must match a strict schema or
+it is dropped. Proposals are cached by tool hash, applied as `proposed`, and
+can only add labels to what the heuristic found. Review them, then share the
+result:
+
+```bash
+uv run airlock tools review                  # accept, edit or reject
+uv run airlock tools export-pack my-server -o packs/labels/my-server.yaml
+```
+
+The Anthropic provider uses the official SDK (`autolabel` extra); the
+OpenAI-compatible one needs nothing extra.
+
 ### Choosing the classifier
 
 The optional L2 classifier is Prompt Guard 2 by default. Airlock's own model,

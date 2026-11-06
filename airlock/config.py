@@ -113,6 +113,38 @@ class OtelConfig(BaseModel):
     service_name: str = "airlock"
 
 
+class AutoLabelConfig(BaseModel):
+    """Ask a model to label tools that no pack or user entry covers.
+
+    Only the tool's name, description and input schema are sent. The API key
+    is read from the environment variable named in ``api_key_env``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    provider: Literal["anthropic", "openai"] = "anthropic"
+    model: str | None = Field(
+        default=None, description="Default for anthropic: claude-opus-5-5. Required for openai."
+    )
+    base_url: str = Field(
+        default="https://api.openai.com/v1", description="OpenAI-compatible endpoint."
+    )
+    api_key_env: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description="Default: ANTHROPIC_API_KEY (anthropic) or OPENAI_API_KEY (openai).",
+    )
+    timeout_seconds: float = Field(default=30.0, gt=0, le=600)
+    min_confidence: float = Field(default=0.6, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def _model_for_openai(self) -> AutoLabelConfig:
+        if self.enabled and self.provider == "openai" and not self.model:
+            raise ValueError("auto_label.model is required for the openai provider")
+        return self
+
+
 LabelName = Literal["source_untrusted", "source_secret", "sink"]
 ArgRoleName = Literal["destination", "content", "path", "code"]
 
@@ -163,6 +195,7 @@ class AirlockConfig(BaseModel):
     approvals: ApprovalConfig = Field(default_factory=ApprovalConfig)
     slack: SlackConfig = Field(default_factory=SlackConfig)
     otel: OtelConfig = Field(default_factory=OtelConfig)
+    auto_label: AutoLabelConfig = Field(default_factory=AutoLabelConfig)
 
     @field_validator("data_dir", "log_path", "policy", mode="before")
     @classmethod
@@ -232,6 +265,7 @@ def load_config(config_path: Path | str | None = None) -> AirlockConfig:
 __all__ = [
     "AirlockConfig",
     "ApprovalConfig",
+    "AutoLabelConfig",
     "ClassifierConfig",
     "ClassifierModel",
     "ConfigError",

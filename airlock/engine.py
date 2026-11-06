@@ -153,6 +153,8 @@ class Engine:
         self.mode_override: str | None = None
         # airlock.telemetry.Telemetry when otel is enabled.
         self.telemetry: Any | None = None
+        # airlock.registry.autolabel.AutoLabeler when auto_label is enabled.
+        self.autolabeler: Any | None = None
 
     def note_client(self, server_id: str, client: str) -> None:
         """Record that MCP client ``client`` uses ``server_id`` (shared across processes)."""
@@ -283,6 +285,16 @@ class Engine:
                         )
                     return []
                 continue
+
+        # Auto-label tools no pack or user entry covers (only name, description
+        # and schema leave the machine); proposals are cached by tool hash.
+        if self.autolabeler is not None:
+            try:
+                await self.autolabeler.label_tools(
+                    server_id, normalized_tools, self.label_resolver.has_explicit
+                )
+            except Exception as exc:  # labelling must never block discovery
+                sys.stderr.write(f"airlock: auto-labelling failed: {type(exc).__name__}\n")
 
         # Update registry: TOFU, hash pinning, quarantine, description checking
         visible_tools, _diffs = await self.registry.process_server_tools(

@@ -87,6 +87,15 @@ with respect to the classifier, not an indication that the result is benign.
   warns and runs without telemetry. Spans are emitted per decision (calls and
   results, including approval rows).
 
+## Auto-labelling
+
+- Both providers are tested with mocks only; neither has been called for real
+  here (no API key, and the `anthropic` SDK is an optional extra).
+- A fooled labeller can still *add* wrong labels (more ASKs, no silent
+  bypass); it cannot remove labels the heuristic found. Labels for tools the
+  heuristic misses entirely depend on the model resisting the description.
+- Proposals below `min_confidence` are stored but not applied.
+
 ## Terminal approvals
 
 - Approvals need a controlling terminal. MCP servers started by desktop apps
