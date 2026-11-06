@@ -6,6 +6,7 @@ import asyncio
 import json
 import sys
 from datetime import datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -14,14 +15,16 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+from airlock import install
 from airlock.audit.store import AuditStore
-from airlock.config import ConfigError, load_config
+from airlock.config import ConfigError, find_config_path, load_config
 from airlock.engine_factory import build_engine
 from airlock.honeytokens.cli import honeytokens_app
 from airlock.policy.cli import policy_app
 from airlock.policy.schema import PolicyError
 from airlock.registry.store import ToolRegistry, labels_from_row
 from airlock.registry.trifecta import find_trifecta
+from airlock.report import build_report, render_markdown, render_text
 from airlock.transport.stdio import run_stdio_proxy
 
 app = typer.Typer(
@@ -38,6 +41,47 @@ tools_app = typer.Typer(
 app.add_typer(tools_app, name="tools")
 app.add_typer(policy_app, name="policy")
 app.add_typer(honeytokens_app, name="honeytokens")
+
+
+class Mode(StrEnum):
+    enforce = "enforce"
+    shadow = "shadow"
+
+
+class Client(StrEnum):
+    all = "all"
+    claude_desktop = "claude-desktop"
+    cursor = "cursor"
+
+
+class ReportFormat(StrEnum):
+    text = "text"
+    markdown = "markdown"
+
+
+_APP_TITLES = {"claude-desktop": "Claude Desktop", "cursor": "Cursor"}
+
+
+def _targets(client: Client, config_paths: list[Path] | None) -> list[tuple[str, Path]]:
+    """``(label, path)`` of the client configs to work on."""
+    if config_paths:
+        return [(str(path), path.expanduser()) for path in config_paths]
+    apps = install.APPS if client is Client.all else (client.value,)
+    found: list[tuple[str, Path]] = []
+    for app_name in apps:
+        for path in install.config_paths(app_name):  # type: ignore[arg-type]
+            if path.is_file():
+                found.append((_APP_TITLES[app_name], path))
+    return found
+
+
+def _looked_in(client: Client) -> str:
+    apps = install.APPS if client is Client.all else (client.value,)
+    return ", ".join(
+        str(path)
+        for app_name in apps
+        for path in install.config_paths(app_name)  # type: ignore[arg-type]
+    )
 
 
 def _not_implemented() -> None:
@@ -58,6 +102,12 @@ def wrap(
         Path | None,
         typer.Option("--config", "-c", help="Path to airlock.yaml configuration file."),
     ] = None,
+    mode: Annotated[
+        Mode | None,
+        typer.Option(
+            "--mode", help="shadow: log what would happen, block nothing. Overrides config."
+        ),
+    ] = None,
     command: Annotated[
         list[str] | None,
         typer.Argument(help="Server command and arguments to wrap."),
@@ -71,7 +121,11 @@ def wrap(
 
     try:
         cfg = load_config(config)
+        if mode is not None:
+            cfg = cfg.model_copy(update={"mode": mode.value})
         engine = build_engine(cfg)
+        if mode is not None:
+            engine.mode_override = mode.value
     except (ConfigError, PolicyError) as exc:
         sys.stderr.write(f"Error: {exc}\n")
         raise typer.Exit(code=1) from exc
@@ -365,22 +419,154 @@ def serve() -> None:
     _not_implemented()
 
 
-@app.command()
-def init() -> None:
-    """Initialize Airlock configuration and local data directory."""
-    _not_implemented()
+ClientOption = Annotated[
+    Client,
+    typer.Option("--client", help="Which app's MCP config to change."),
+]
+ConfigPathOption = Annotated[
+    list[Path] | None,
+    typer.Option(
+        "--config-path",
+        help="An MCP config file to use instead of the apps' default locations (repeatable), "
+        "for example a project's .cursor/mcp.json.",
+    ),
+]
+YesOption = Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")]
 
 
 @app.command()
-def uninstall() -> None:
-    """Uninstall Airlock configurations and wrappers."""
-    _not_implemented()
+def init(
+    client: ClientOption = Client.all,
+    config_path: ConfigPathOption = None,
+    mode: Annotated[
+        Mode | None,
+        typer.Option("--mode", help="Wrap servers in shadow mode: log only, block nothing."),
+    ] = None,
+    yes: YesOption = False,
+    airlock_command: Annotated[
+        str | None,
+        typer.Option("--airlock-command", help="Command written into the configs."),
+    ] = None,
+) -> None:
+    """Wrap the stdio MCP servers of Claude Desktop and Cursor with Airlock."""
+    targets = _targets(client, config_path)
+    if not targets:
+        print(f"No MCP client config found. Looked in: {_looked_in(client)}")
+        print("Pass --config-path to point at one.")
+    command = airlock_command or install.default_airlock_command()
+    plans: list[tuple[str, install.ConfigPlan]] = []
+    for label, path in targets:
+        try:
+            config_plan = install.plan(path)
+        except install.InstallError as exc:
+            sys.stderr.write(f"Error: {exc}\n")
+            raise typer.Exit(code=1) from exc
+        plans.append((label, config_plan))
+        print(f"{label}: {path}")
+        if not config_plan.servers:
+            print("  no servers configured")
+        for server in config_plan.servers:
+            if server.status == "wrap":
+                entry = config_plan.data["mcpServers"][server.name]
+                original = " ".join([entry["command"], *map(str, entry.get("args", []))])
+                print(f"  wrap  {server.name}: {original}")
+            else:
+                print(f"  skip  {server.name}: {server.note}")
+
+    pending = [(label, plan_) for label, plan_ in plans if plan_.to_wrap]
+    if pending:
+        count = sum(len(plan_.to_wrap) for _, plan_ in pending)
+        shadow = " in shadow mode" if mode is Mode.shadow else ""
+        if not yes and not typer.confirm(
+            f"\nWrap {count} server(s){shadow} with {command}?", default=False
+        ):
+            print("Nothing changed.")
+            raise typer.Exit(code=1)
+        for _label, config_plan in pending:
+            try:
+                saved = install.apply_init(
+                    config_plan, command, mode.value if mode is Mode.shadow else None
+                )
+            except (OSError, install.InstallError) as exc:
+                sys.stderr.write(f"Error: could not update {config_plan.path}: {exc}\n")
+                raise typer.Exit(code=1) from exc
+            print(f"Updated {config_plan.path} (backup: {saved})")
+        apps = ", ".join(sorted({label for label, _ in pending}))
+        print(f"Restart {apps} to load the wrapped servers. Undo with `airlock uninstall`.")
+    elif plans:
+        print("\nNothing to wrap.")
+
+    existing = find_config_path()
+    if existing is not None:
+        print(f"Using Airlock config {existing} (left unchanged).")
+        return
+    starter = install.starter_config_path()
+    if yes or typer.confirm(f"Write a starter Airlock config to {starter}?", default=True):
+        if install.write_starter_config(starter):
+            print(f"Wrote {starter}")
+        else:
+            print(f"{starter} already exists; left unchanged.")
 
 
 @app.command()
-def report() -> None:
-    """Generate security inspection and compliance reports."""
-    _not_implemented()
+def uninstall(
+    client: ClientOption = Client.all,
+    config_path: ConfigPathOption = None,
+    yes: YesOption = False,
+) -> None:
+    """Undo `airlock init`: restore the latest backup, or unwrap in place if there is none."""
+    targets = _targets(client, config_path)
+    if not targets:
+        print(f"No MCP client config found. Looked in: {_looked_in(client)}")
+        return
+    for label, path in targets:
+        saved = install.latest_backup(path)
+        if saved is not None:
+            question = (
+                f"{label}: restore {path} from {saved.name}? "
+                "Changes made to it after `airlock init` are lost."
+            )
+            if yes or typer.confirm(question, default=False):
+                install.restore(path, saved)
+                print(f"Restored {path} from {saved}")
+            continue
+        try:
+            config_plan = install.plan(path)
+        except install.InstallError as exc:
+            sys.stderr.write(f"Error: {exc}\n")
+            raise typer.Exit(code=1) from exc
+        names = [server.name for server in config_plan.wrapped]
+        if not names:
+            print(f"{label}: nothing wrapped in {path}")
+            continue
+        question = f"{label}: no backup found; unwrap {', '.join(names)} in {path}?"
+        if yes or typer.confirm(question, default=False):
+            install.apply_unwrap_in_place(config_plan)
+            print(f"Unwrapped {', '.join(names)} in {path}")
+
+
+@app.command()
+def report(
+    since: Annotated[str, typer.Option("--since", help="Period, e.g. 24h, 7d, 4w.")] = "7d",
+    output_format: Annotated[
+        ReportFormat, typer.Option("--format", help="text or markdown.")
+    ] = ReportFormat.text,
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to airlock.yaml configuration file."),
+    ] = None,
+) -> None:
+    """Summarise decisions, shadow-mode findings, quarantines, trifectas and honeytoken alerts."""
+    try:
+        cfg = load_config(config)
+        built = build_report(cfg, since)
+    except (ConfigError, ValueError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        raise typer.Exit(code=1) from exc
+    rendered = (
+        render_markdown(built) if output_format is ReportFormat.markdown else render_text(built)
+    )
+    sys.stdout.write(rendered)
 
 
 @app.command()

@@ -32,9 +32,20 @@ with respect to the classifier, not an indication that the result is benign.
 
 ## Placeholder CLI commands
 
-`serve`, `init`, `report`, and `uninstall` are placeholders. Use `wrap`,
-`tools`, `policy`, `honeytokens` and `logs` for the currently implemented CLI
-surface.
+`serve`, `attack` and `dashboard` are placeholders.
+
+## `airlock init`
+
+- Configs must be plain JSON. A file with comments is reported as invalid and
+  left untouched.
+- `uninstall` restores the most recent backup, so edits made to the client
+  config after `init` are lost (it asks first). Without a backup it unwraps in
+  place.
+- To change the mode of already-wrapped servers, run `uninstall`, then `init`
+  again with the new `--mode`.
+- The wrapped command is the absolute path of the `airlock` executable that
+  ran `init`; moving or deleting that environment breaks the wrapped servers
+  until `init` is run again from the new one.
 
 ## Honeytokens and the trifecta warning
 

@@ -58,9 +58,44 @@ uv run airlock logs --verdict DENY --json
 ```
 
 Use `--config path/to/airlock.yaml` with each command to select a
-configuration file. `airlock serve` and `airlock init` are reserved for a
-future standalone service/configuration workflow; `wrap` is the current proxy
-entry point.
+configuration file.
+
+### Set up your MCP clients
+
+`airlock init` finds the Claude Desktop and Cursor MCP configs, lists the
+servers it will wrap, asks, writes a timestamped backup next to each file and
+rewrites every local (stdio) server to run through `airlock wrap`, keeping its
+`env`. Remote HTTP servers are listed and skipped. Running it again changes
+nothing. It also offers a commented starter config at
+`~/.config/airlock/airlock.yaml` (never over an existing one).
+
+```bash
+uv run airlock init                           # both apps, asks first
+uv run airlock init --mode shadow             # log only for a trial period
+uv run airlock init --config-path .cursor/mcp.json
+uv run airlock uninstall                      # restore the backup (or unwrap in place)
+```
+
+Config locations: Claude Desktop uses
+`~/Library/Application Support/Claude/claude_desktop_config.json` (macOS),
+`%APPDATA%\Claude\claude_desktop_config.json` (Windows) or
+`~/.config/Claude/claude_desktop_config.json` (Linux); Cursor uses
+`~/.cursor/mcp.json`. Restart the app after `init` or `uninstall`.
+
+### Shadow mode and reports
+
+In shadow mode (`mode: shadow`, `airlock wrap --mode shadow` or
+`airlock init --mode shadow`) every call and result goes through and Airlock
+records what it would have done. `airlock report` summarises a period:
+
+```bash
+uv run airlock report --since 7d
+uv run airlock report --since 30d --format markdown > airlock-report.md
+```
+
+It covers decisions by verdict, the rules that fired, what shadow mode would
+have stopped, quarantined tools, lethal-trifecta warnings and honeytoken
+alerts.
 
 ### Policies and approvals
 

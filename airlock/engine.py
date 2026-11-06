@@ -148,6 +148,8 @@ class Engine:
         self.policy: PolicyProvider | None = policy
         self.approver: Approver = approver if approver is not None else NoApprover()
         self._trifectas_reported: set[Trifecta] = set()
+        # Set by `airlock wrap --mode`: wins over both the policy and the config.
+        self.mode_override: str | None = None
 
     def note_client(self, server_id: str, client: str) -> None:
         """Record that MCP client ``client`` uses ``server_id`` (shared across processes)."""
@@ -171,7 +173,9 @@ class Engine:
 
     @property
     def mode(self) -> str:
-        """``enforce`` or ``shadow``; a policy's ``mode`` overrides the config."""
+        """``enforce`` or ``shadow``: ``--mode``, else the policy's ``mode``, else the config."""
+        if self.mode_override is not None:
+            return self.mode_override
         if self.policy is not None:
             policy_mode = self.policy.current().policy.mode
             if policy_mode is not None:
