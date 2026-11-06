@@ -319,6 +319,26 @@ and the report. "Mark as false positive" saves the decision to
 127.0.0.1 only, needs the one-time link (then a strict session cookie), and
 loads nothing from the internet.
 
+### Red-team your setup (`airlock attack`)
+
+**For testing your own setup only.** A local, deliberately malicious MCP test
+server (`attack/server.py`) tries a poisoned tool description, injected tool
+results (plain, hidden HTML, zero-width, base64), a rug pull, cross-server
+shadowing, and an exfiltration lure. The only exfiltration target is a canary
+listener on 127.0.0.1 and the only secret is a honeytoken.
+
+```bash
+uv run airlock attack --sdk                  # automated, no human: a report card in seconds
+uv run airlock attack --client cursor        # guided run inside your own client
+uv run airlock attack --client cursor --without-airlock   # the same, unprotected
+```
+
+`--sdk` runs every scenario against a scripted agent that obeys every
+injection, once without Airlock and once with it, and exits non-zero if any
+scenario gets through. `--client` writes a copy of your client config with the
+test server added (your real config is never changed), gives you the prompts
+to send, and builds the report card from the canary and the audit log.
+
 ### Choosing the classifier
 
 The optional L2 classifier is Prompt Guard 2 by default. Airlock's own model,

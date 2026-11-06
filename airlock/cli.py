@@ -95,11 +95,6 @@ def _looked_in(client: Client) -> str:
     )
 
 
-def _not_implemented() -> None:
-    sys.stderr.write("not implemented yet\n")
-    raise typer.Exit(code=1)
-
-
 @app.command(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
@@ -892,10 +887,100 @@ def report(
     sys.stdout.write(rendered)
 
 
-@app.command()
-def attack() -> None:
-    """Run prompt injection and security attack simulations."""
-    _not_implemented()
+@app.command(epilog="For testing your own setup only.")
+def attack(
+    sdk: Annotated[
+        bool, typer.Option("--sdk", help="Automated run with a scripted agent (no human, CI-safe).")
+    ] = False,
+    client: Annotated[
+        Client | None,
+        typer.Option("--client", help="Guided run inside Claude Desktop or Cursor (needs you)."),
+    ] = None,
+    scenario: Annotated[
+        str, typer.Option("--scenario", help="Scenarios to run (only `all` for now).")
+    ] = "all",
+    without_airlock: Annotated[
+        bool,
+        typer.Option("--without-airlock", help="Client mode: add the test server unwrapped."),
+    ] = False,
+    data_dir: Annotated[
+        Path | None,
+        typer.Option("--data-dir", help="SDK mode: where to keep the run's audit log."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="SDK mode: JSON output.")] = False,
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to airlock.yaml configuration file."),
+    ] = None,
+) -> None:
+    """Red-team your own agent setup with a local malicious test server.
+
+    FOR TESTING YOUR OWN SETUP ONLY: every exfiltration target is a canary on
+    127.0.0.1 and every payload is a honeytoken.
+    """
+    from airlock.attack.scenarios import NOTICE
+
+    if scenario != "all":
+        sys.stderr.write("Error: only --scenario all is supported.\n")
+        raise typer.Exit(code=1)
+    if sdk == (client is not None and client is not Client.all):
+        sys.stderr.write("Error: choose --sdk or --client claude-desktop|cursor.\n")
+        raise typer.Exit(code=1)
+    sys.stderr.write(f"{NOTICE}\n\n")
+    if sdk:
+        from airlock.attack.sdk_run import as_dicts, render, run_sdk
+
+        outcomes = run_sdk(data_dir)
+        if json_output:
+            print(json.dumps(as_dicts(outcomes), indent=2))
+        else:
+            sys.stdout.write(render(outcomes, data_dir))
+        if not all(item.detected for item in outcomes):
+            raise typer.Exit(code=2)
+        return
+    assert client is not None
+    _attack_client(client.value, not without_airlock, config)
+
+
+def _attack_client(client_name: str, wrapped: bool, config: Path | None) -> None:
+    import time
+
+    from airlock.attack import client as kit
+    from airlock.attack.scenarios import CanaryListener
+    from airlock.honeytokens.store import load as load_tokens
+    from airlock.honeytokens.store import save as save_tokens
+    from airlock.honeytokens.store import store_path
+    from airlock.honeytokens.tokens import create_set
+
+    try:
+        cfg = load_config(config)
+    except ConfigError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        raise typer.Exit(code=1) from exc
+    source = install.config_paths(client_name)[0]  # type: ignore[arg-type]
+    with CanaryListener() as canary:
+        tokens = create_set(canary_port=canary.port)
+        store = load_tokens(store_path(cfg.data_dir))
+        store.tokens.extend(tokens)
+        save_tokens(store_path(cfg.data_dir), store)
+        token = next(t.value for t in tokens if t.kind == "aws_secret_access_key")
+        entry = kit.attack_entry(install.default_airlock_command(), canary.url(), token, wrapped)
+        target = kit.write_attack_config(
+            source, cfg.data_dir / "attack" / f"{client_name}-config.json", entry
+        )
+        app_name = _APP_TITLES[client_name]
+        print(f"1. Quit {app_name}.")
+        print(f"2. Back up {source}, then replace it with {target}")
+        print(f"   (or copy just the `{kit.SERVER}` entry into it).")
+        print(f"3. Start {app_name}, open a new chat and send these prompts one by one:")
+        for number, prompt in enumerate(kit.PROMPTS, start=1):
+            print(f"   {number}) {prompt}")
+        print(f"4. Keep this window open: the canary listens on {canary.url()}.")
+        started = time.time()
+        typer.prompt("Press Enter when the agent has finished", default="", show_default=False)
+        outcomes = kit.report_card(cfg.data_dir, started, canary.received(token), wrapped)
+    sys.stdout.write("\n" + kit.render(outcomes))
+    print(f"\nRestore your original config from the backup you made of {source}.")
 
 
 @app.command()

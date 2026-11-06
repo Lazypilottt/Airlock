@@ -30,9 +30,15 @@ Prompt Guard is optional and gated. Unless `classifier.required` is enabled,
 missing or unloadable weights continue with L0 and L1 only. This is fail-open
 with respect to the classifier, not an indication that the result is benign.
 
-## Placeholder CLI commands
+## `airlock attack`
 
-`attack` is a placeholder.
+- The `--sdk` agent is scripted (it does whatever an injection asks), not a
+  real model, so the report card shows what Airlock stops, not how likely a
+  given model is to fall for each attack.
+- Client mode depends on the model actually calling the test tools; a
+  scenario the agent never exercised is reported as such.
+- The scenarios match Airlock's own detectors by design; they are a smoke
+  test of the setup, not a benchmark (use `bench/` for that).
 
 ## `airlock serve`
 
