@@ -216,6 +216,35 @@ classifier:
 
 The benchmark can be run with `python -m bench.latency`.
 
+### Python SDK (agents without MCP)
+
+```python
+from airlock.sdk import Airlock, AirlockBlocked
+
+firewall = Airlock()  # same engine and policy as `airlock wrap`
+
+
+@firewall.tool(labels=["source_untrusted"])
+def fetch_page(url: str) -> str: ...
+
+
+@firewall.tool(labels=["sink"], args={"to": "destination", "body": "content"})
+def send_email(to: str, body: str) -> str: ...
+
+
+with firewall.session(user_prompt=prompt):  # addresses the user typed are trusted
+    page = fetch_page(url)
+    send_email("bob@corp.example", summary)  # an address taken from `page` would be blocked
+```
+
+Sync and async functions both work; `firewall.wrap_tool(fn, labels=[...])`
+guards an existing function. DENY raises `AirlockBlocked` (with `.reasons`),
+or returns an error string with `Airlock(on_deny="return")`; REDACT runs the
+tool with redacted arguments or returns the redacted result; ASK calls
+`Airlock(approve=callback)` and is denied without one. Examples:
+`examples/sdk_openai_loop.py` (a plain loop against any OpenAI-compatible
+API) and `examples/sdk_pydantic_ai.py` (PydanticAI, one line).
+
 ### Choosing the classifier
 
 The optional L2 classifier is Prompt Guard 2 by default. Airlock's own model,
