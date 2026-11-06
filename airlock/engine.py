@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import sys
 import time
 from collections.abc import Sequence
 from typing import Any, Literal, Protocol, runtime_checkable
@@ -150,6 +151,8 @@ class Engine:
         self._trifectas_reported: set[Trifecta] = set()
         # Set by `airlock wrap --mode`: wins over both the policy and the config.
         self.mode_override: str | None = None
+        # airlock.telemetry.Telemetry when otel is enabled.
+        self.telemetry: Any | None = None
 
     def note_client(self, server_id: str, client: str) -> None:
         """Record that MCP client ``client`` uses ``server_id`` (shared across processes)."""
@@ -582,6 +585,13 @@ class Engine:
         decision: Decision,
         latency_ms: float,
     ) -> None:
+        if self.telemetry is not None:
+            try:
+                self.telemetry.record(
+                    direction, event.server_id, event.tool_name, decision, latency_ms
+                )
+            except Exception as exc:  # telemetry must never break enforcement
+                sys.stderr.write(f"airlock: telemetry failed: {type(exc).__name__}: {exc}\n")
         if not self.audit_store:
             return
         if isinstance(event, ToolCall):

@@ -31,7 +31,27 @@ def load_policy(config: AirlockConfig) -> PolicySource:
 
 
 def default_approver(config: AirlockConfig) -> Approver:
-    """Terminal approvals, unless ``approvals.terminal`` is false."""
+    """Slack when ``slack.channel`` is set, else the terminal (if ``approvals.terminal``).
+
+    Slack tokens come from the environment variables named in the config; if
+    either is missing, every ASK is denied with that reason.
+    """
+    slack = config.slack
+    if slack.channel:
+        import os
+
+        from airlock.approve.slack import SlackApprover, SocketModeTransport
+
+        bot, app = os.environ.get(slack.bot_token_env), os.environ.get(slack.app_token_env)
+        if not bot or not app:
+            missing = slack.bot_token_env if not bot else slack.app_token_env
+            return NoApprover(f"approval required but Slack token ${missing} is not set")
+        return SlackApprover(
+            SocketModeTransport(bot, app),
+            slack.channel,
+            timeout=slack.timeout_seconds,
+            allowed_users=slack.allowed_users,
+        )
     if not config.approvals.terminal:
         return NoApprover(
             "approval required but terminal approvals are turned off (approvals.terminal: false)"
@@ -96,6 +116,10 @@ def build_engine(
         engine.add_tool_call_check(TaintCheck(cfg, engine.labels_for))
     if detectors:
         engine.add_tool_result_check(CascadeResultCheck(cfg))
+    if cfg.otel.enabled:
+        from airlock.telemetry import setup_otlp
+
+        engine.telemetry = setup_otlp(cfg.otel)
     for check in extra_tool_call_checks:
         engine.add_tool_call_check(check)
     for check in extra_tool_result_checks:

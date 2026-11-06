@@ -85,6 +85,34 @@ class ApprovalConfig(BaseModel):
     timeout_seconds: float = Field(default=30.0, gt=0, le=3600)
 
 
+class SlackConfig(BaseModel):
+    """Slack approvals. Tokens are read from the environment variables named here."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    channel: str | None = Field(default=None, description="Channel to post approvals in.")
+    bot_token_env: str = Field(
+        default="AIRLOCK_SLACK_BOT_TOKEN", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$"
+    )
+    app_token_env: str = Field(
+        default="AIRLOCK_SLACK_APP_TOKEN", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$"
+    )
+    timeout_seconds: float = Field(default=300.0, gt=0, le=86_400)
+    allowed_users: list[str] = Field(
+        default_factory=list, description="Slack user ids allowed to answer; empty: anyone."
+    )
+
+
+class OtelConfig(BaseModel):
+    """OpenTelemetry traces and metrics (needs the ``otel`` extra)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    endpoint: str = Field(default="http://localhost:4318", description="OTLP/HTTP collector.")
+    service_name: str = "airlock"
+
+
 LabelName = Literal["source_untrusted", "source_secret", "sink"]
 ArgRoleName = Literal["destination", "content", "path", "code"]
 
@@ -133,6 +161,8 @@ class AirlockConfig(BaseModel):
         description="Policy file; the bundled packs/policies/default.yaml when unset.",
     )
     approvals: ApprovalConfig = Field(default_factory=ApprovalConfig)
+    slack: SlackConfig = Field(default_factory=SlackConfig)
+    otel: OtelConfig = Field(default_factory=OtelConfig)
 
     @field_validator("data_dir", "log_path", "policy", mode="before")
     @classmethod
@@ -206,6 +236,8 @@ __all__ = [
     "ClassifierModel",
     "ConfigError",
     "LabelOverride",
+    "OtelConfig",
+    "SlackConfig",
     "TaintConfig",
     "ThresholdOverride",
     "find_config_path",

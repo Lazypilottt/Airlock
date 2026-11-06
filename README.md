@@ -245,6 +245,37 @@ tool with redacted arguments or returns the redacted result; ASK calls
 `examples/sdk_openai_loop.py` (a plain loop against any OpenAI-compatible
 API) and `examples/sdk_pydantic_ai.py` (PydanticAI, one line).
 
+### Approvals in Slack
+
+Set a channel and Airlock asks there instead of on the terminal, with Approve
+and Deny buttons (Socket Mode, so no public URL):
+
+```yaml
+slack:
+  channel: C0123456789          # or #airlock-approvals
+  timeout_seconds: 300          # no answer denies
+  allowed_users: [U0ABCDEF]     # optional: who may answer
+  # tokens are read from these environment variables, never from this file
+  bot_token_env: AIRLOCK_SLACK_BOT_TOKEN   # xoxb-...
+  app_token_env: AIRLOCK_SLACK_APP_TOKEN   # xapp-..., scope connections:write
+```
+
+Install with the `slack` extra. The message shows the tool, server, rule,
+reasons and a masked argument preview; the answer, who gave it and when go to
+the audit log.
+
+### OpenTelemetry
+
+```yaml
+otel:
+  enabled: true
+  endpoint: http://localhost:4318   # OTLP/HTTP collector
+```
+
+With the `otel` extra, every decision becomes a span (`airlock.tool`,
+`airlock.server`, `airlock.verdict`, `airlock.rule`, top scores, latency) and
+increments the `airlock.decisions` counter by verdict.
+
 ### Choosing the classifier
 
 The optional L2 classifier is Prompt Guard 2 by default. Airlock's own model,

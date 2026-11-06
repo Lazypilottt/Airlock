@@ -76,6 +76,17 @@ with respect to the classifier, not an indication that the result is benign.
 - Two running copies of the same client (same `clientInfo.name`) count as one
   toolset.
 
+## Slack approvals and OpenTelemetry
+
+- The Slack Socket Mode connection (`SocketModeTransport`) is written from
+  Slack's documentation and the `slack_sdk` API but has not been run against
+  a real workspace yet; the approval flow is tested with a mocked Slack.
+- Slack and the terminal are alternatives: with `slack.channel` set, ASK goes
+  to Slack only.
+- The OTLP setup (`setup_otlp`) needs the `otel` extra; without it Airlock
+  warns and runs without telemetry. Spans are emitted per decision (calls and
+  results, including approval rows).
+
 ## Terminal approvals
 
 - Approvals need a controlling terminal. MCP servers started by desktop apps
