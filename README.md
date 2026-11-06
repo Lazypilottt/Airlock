@@ -222,11 +222,30 @@ Install the optional harness with `uv pip install -e '.[bench]'`. Run a cheap
 smoke benchmark with five tasks:
 
 ```bash
-python -m bench.run --config none --model gpt-4o-mini-2024-07-18 --suites workspace --limit 5
-python -m bench.run --config promptguard --model gpt-4o-mini-2024-07-18 --suites workspace --limit 5
-python -m bench.run --config airlock-detect --model gpt-4o-mini-2024-07-18 --suites workspace --limit 5
+for config in none promptguard airlock-detect airlock-flow airlock-full; do
+  python -m bench.run --config $config --model gpt-4o-mini-2024-07-18 --suites workspace --limit 5
+done
 python -m bench.report bench/results/*.json
 ```
+
+Configurations, all built with the default engine factory:
+
+| Config | What runs |
+|---|---|
+| `none` | no defence |
+| `promptguard` | Prompt Guard 2 alone on tool results |
+| `airlock-detect` | the L0/L1/L2 detector cascade on results, with the default policy |
+| `airlock-flow` | taint tracking, the default policy and honeytokens on calls; no detectors |
+| `airlock-full` | detectors and flow together |
+
+Every tool call goes through `Engine.on_tool_call` before AgentDojo runs it:
+DENY returns an error to the agent, and ASK (nobody answers approvals in a
+benchmark) counts as DENY. The results file records Airlock's own counts
+(`calls_denied`, `calls_asked`, `results_denied`, `results_redacted`, rules
+fired). AgentDojo's tools are labelled by `packs/labels/agentdojo.yaml`. Each
+run uses a fresh temporary data directory and approves the suite's tools on
+first listing. Honeytokens are not planted in the suites' data: see
+`docs/known-issues.md`.
 
 Hosted models require their provider credentials (`OPENAI_API_KEY` for the
 example model). AgentDojo commonly makes one or more calls per task; its task

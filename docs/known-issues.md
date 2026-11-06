@@ -86,3 +86,18 @@ with respect to the classifier, not an indication that the result is benign.
 - The Windows console path is implemented but untested.
 - A call cancelled by the client while its approval prompt is open is still
   forwarded if you then approve it.
+
+## Benchmark
+
+- **No honeytokens in AgentDojo data.** Planting them would mean adding
+  values to the suites' environments (inboxes, files, accounts). AgentDojo's
+  utility and security checks compare the environment before and after a
+  task, and some user tasks count or search those items, so planted values
+  could change task outcomes. The `airlock-flow` and `airlock-full`
+  configurations still run the honeytoken check; it simply has nothing to
+  find.
+- **ASK is a block.** Benchmarks have no human; the results count ASK
+  separately (`calls_asked`) so its share is visible.
+- **Before 0.2 the adapter registered tools one at a time,** which left every
+  tool after the first pending and denied. Numbers from that adapter are not
+  comparable; none were published.

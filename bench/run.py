@@ -6,13 +6,12 @@ import argparse
 import importlib.metadata
 import json
 import random
+import tempfile
 from datetime import date
 from pathlib import Path
 from typing import Any
 
-from airlock.config import AirlockConfig
-from airlock.detect.classifier import PromptGuardClassifier
-from airlock.engine_factory import build_engine
+from bench.configs import CONFIGS, build_bench_engine
 
 
 def _versions() -> dict[str, str]:
@@ -25,45 +24,31 @@ def _versions() -> dict[str, str]:
     return versions
 
 
-def _pipeline(model: str, config_name: str) -> Any:
+def _pipeline(model: str, config_name: str, data_dir: Path) -> tuple[Any, Any]:
+    """The AgentDojo pipeline and the Airlock adapter in it (``None`` for ``none``)."""
     from agentdojo.agent_pipeline.agent_pipeline import AgentPipeline, get_llm
     from agentdojo.agent_pipeline.basic_elements import InitQuery, SystemMessage
     from agentdojo.agent_pipeline.tool_execution import ToolsExecutionLoop, ToolsExecutor
     from agentdojo.models import MODEL_PROVIDERS, ModelsEnum
 
-    from bench.agentdojo_adapter import AirlockAgentDojoAdapter, PromptGuardResultCheck
+    from bench.agentdojo_adapter import AirlockAgentDojoAdapter
 
     model_enum = ModelsEnum(model)
     llm = get_llm(MODEL_PROVIDERS[model_enum], model, None, "tool")
-    if config_name == "none":
-        elements = [ToolsExecutor(), llm]
-    else:
-        config = AirlockConfig()
-        if config_name == "promptguard":
-            engine = build_engine(
-                config,
-                detectors=False,
-                flow=False,
-                extra_tool_result_checks=[
-                    PromptGuardResultCheck(
-                        PromptGuardClassifier(config.data_dir, config.classifier),
-                        block_threshold=config.block_above,
-                    )
-                ],
-            )
-        else:
-            engine = build_engine(config, detectors=True, flow=False)
-        adapter = AirlockAgentDojoAdapter(engine)
-        elements = [adapter, ToolsExecutor(), adapter, llm]
-
-    return AgentPipeline(
+    engine = build_bench_engine(config_name, data_dir)
+    adapter = AirlockAgentDojoAdapter(engine, name=config_name) if engine is not None else None
+    elements = (
+        [ToolsExecutor(), llm] if adapter is None else [adapter, ToolsExecutor(), adapter, llm]
+    )
+    pipeline = AgentPipeline(
         [
             SystemMessage("You are a helpful assistant."),
             InitQuery(),
-            llm if config_name == "none" else elements[-1],
+            llm,
             ToolsExecutionLoop(elements),
         ]
     )
+    return pipeline, adapter
 
 
 def run(
@@ -73,6 +58,7 @@ def run(
     limit: int | None,
     seed: int,
     config_name: str,
+    injection_limit: int | None = None,
 ) -> dict[str, Any]:
     """Run selected AgentDojo suites and return JSON-serializable results."""
     random.seed(seed)
@@ -83,7 +69,8 @@ def run(
     )
     from agentdojo.task_suite.load_suites import get_suite
 
-    pipeline = _pipeline(model, config_name)
+    data_dir = Path(tempfile.mkdtemp(prefix=f"airlock-bench-{config_name}-"))
+    pipeline, adapter = _pipeline(model, config_name, data_dir)
     output: dict[str, Any] = {
         "config": config_name,
         "model": model,
@@ -96,6 +83,11 @@ def run(
         user_tasks = list(suite.user_tasks)[:limit] if limit is not None else None
         if attack:
             attack_instance = load_attack(attack, suite, pipeline)
+            injection_tasks = (
+                list(suite.injection_tasks)[:injection_limit]
+                if injection_limit is not None
+                else None
+            )
             results = benchmark_suite_with_injections(
                 pipeline,
                 suite,
@@ -103,6 +95,7 @@ def run(
                 logdir=None,
                 force_rerun=True,
                 user_tasks=user_tasks,
+                injection_tasks=injection_tasks,
             )
         else:
             results = benchmark_suite_without_injections(
@@ -113,21 +106,36 @@ def run(
             "security": list(results["security_results"].values()),
             "injection_utility": list(results["injection_tasks_utility_results"].values()),
         }
+    # ASK counts as a block in benchmarks; the stats keep it separate.
+    output["airlock"] = adapter.gate.stats.as_dict() if adapter is not None else None
+    output["airlock_data_dir"] = str(data_dir)
     return output
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--config", choices=("none", "promptguard", "airlock-detect"), default="none"
-    )
+    parser.add_argument("--config", choices=CONFIGS, default="none")
     parser.add_argument("--model", default="gpt-4o-mini-2024-07-18")
     parser.add_argument("--suites", nargs="+", default=["workspace"])
     parser.add_argument("--attack", default=None)
-    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--limit", type=int, default=None, help="Run only the first N user tasks.")
+    parser.add_argument(
+        "--injection-limit",
+        type=int,
+        default=None,
+        help="With --attack, run only the first N injection tasks of each suite.",
+    )
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
-    results = run(args.model, args.suites, args.attack, args.limit, args.seed, args.config)
+    results = run(
+        args.model,
+        args.suites,
+        args.attack,
+        args.limit,
+        args.seed,
+        args.config,
+        injection_limit=args.injection_limit,
+    )
     output_dir = Path("bench/results")
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"{date.today().isoformat()}-{args.config}.json"

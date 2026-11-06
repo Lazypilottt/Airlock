@@ -1,0 +1,177 @@
+# Label pack for the AgentDojo benchmark suites (workspace, travel, banking,
+# slack), used by bench/agentdojo_adapter.py, which registers every tool under
+# the server name "agentdojo".
+#
+# Tool names and argument names were read from AgentDojo's source on
+# 2026-11-06: default_suites/v1/<suite>/task_suite.py (the TOOLS lists) and
+# default_suites/v1/tools/*.py (signatures). Injected `Depends(...)`
+# parameters are not tool arguments and are left out.
+#
+# How the labels were chosen:
+# - source_untrusted: anything an outsider can write into: emails, calendar
+#   events, files, web pages, reviews, transaction subjects, Slack messages.
+#   AgentDojo's injections live exactly there.
+# - source_secret: the user's own identifying and financial data (IBAN,
+#   profile with passport and card numbers). Secret taint is denied at a sink
+#   by the default policy, so only data that should never be sent out is here.
+# - sink: anything that sends data to someone else or acts for the user
+#   outside their own workspace (email, sharing, invitations, payments,
+#   bookings, posting, fetching a URL, changing credentials).
+name: agentdojo
+description: AgentDojo v1 benchmark suites (workspace, travel, banking, slack)
+source: https://github.com/ethz-spylab/agentdojo
+servers: ["agentdojo"]
+tools:
+  # --- workspace and travel: email -------------------------------------------
+  - tool: send_email
+    labels: [sink]
+    args: {recipients: destination, cc: destination, bcc: destination, subject: content, body: content, attachments: content}
+  - tool: get_unread_emails
+    labels: [source_untrusted]
+  - tool: get_received_emails
+    labels: [source_untrusted]
+  - tool: get_sent_emails
+    labels: [source_untrusted]
+  - tool: get_draft_emails
+    labels: [source_untrusted]
+  - tool: search_emails
+    labels: [source_untrusted]
+  - tool: search_contacts_by_name
+    labels: [source_untrusted]
+  - tool: search_contacts_by_email
+    labels: [source_untrusted]
+  # delete_email deletes from the user's own inbox: destructive, not a data flow out.
+
+  # --- calendar ----------------------------------------------------------------
+  - tool: search_calendar_events
+    labels: [source_untrusted]
+  - tool: get_day_calendar_events
+    labels: [source_untrusted]
+  - tool: create_calendar_event
+    labels: [sink]
+    args: {participants: destination, title: content, description: content, location: content}
+  - tool: add_calendar_event_participants
+    labels: [sink]
+    args: {participants: destination}
+  # get_current_day, cancel_calendar_event and reschedule_calendar_event carry no
+  # outside data and send nothing new.
+
+  # --- cloud drive ---------------------------------------------------------------
+  - tool: search_files_by_filename
+    labels: [source_untrusted]
+  - tool: get_file_by_id
+    labels: [source_untrusted]
+  - tool: list_files
+    labels: [source_untrusted]
+  - tool: search_files
+    labels: [source_untrusted]
+  - tool: share_file
+    labels: [sink]
+    args: {email: destination, file_id: content}
+  # create_file and append_to_file write to the user's own drive (data only
+  # leaves through share_file, which is a sink).
+
+  # --- travel ----------------------------------------------------------------------
+  - tool: get_user_information
+    labels: [source_secret]
+  - tool: "get_all_*_in_city"
+    labels: [source_untrusted]
+  - tool: "get_rating_reviews_for_*"
+    labels: [source_untrusted]
+  - tool: get_hotels_prices
+    labels: [source_untrusted]
+  - tool: get_hotels_address
+    labels: [source_untrusted]
+  - tool: get_restaurants_address
+    labels: [source_untrusted]
+  - tool: get_cuisine_type_for_restaurants
+    labels: [source_untrusted]
+  - tool: get_dietary_restrictions_for_all_restaurants
+    labels: [source_untrusted]
+  - tool: get_contact_information_for_restaurants
+    labels: [source_untrusted]
+  - tool: get_price_for_restaurants
+    labels: [source_untrusted]
+  - tool: check_restaurant_opening_hours
+    labels: [source_untrusted]
+  - tool: get_car_types_available
+    labels: [source_untrusted]
+  - tool: get_car_fuel_options
+    labels: [source_untrusted]
+  - tool: get_car_rental_address
+    labels: [source_untrusted]
+  - tool: get_car_price_per_day
+    labels: [source_untrusted]
+  - tool: get_flight_information
+    labels: [source_untrusted]
+  - tool: reserve_hotel
+    labels: [sink]
+    args: {hotel: destination}
+  - tool: reserve_restaurant
+    labels: [sink]
+    args: {restaurant: destination}
+  - tool: reserve_car_rental
+    labels: [sink]
+    args: {company: destination}
+
+  # --- banking -------------------------------------------------------------------
+  - tool: get_iban
+    labels: [source_secret]
+  - tool: get_user_info
+    labels: [source_secret]
+  - tool: get_most_recent_transactions
+    labels: [source_untrusted]
+  - tool: get_scheduled_transactions
+    labels: [source_untrusted]
+  - tool: read_file
+    labels: [source_untrusted]
+    args: {file_path: path}
+  - tool: send_money
+    labels: [sink]
+    args: {recipient: destination, subject: content}
+  - tool: schedule_transaction
+    labels: [sink]
+    args: {recipient: destination, subject: content}
+  - tool: update_scheduled_transaction
+    labels: [sink]
+    args: {recipient: destination, subject: content}
+  - tool: update_password
+    labels: [sink]
+    args: {password: content}
+  - tool: update_user_info
+    labels: [sink]
+    args: {first_name: content, last_name: content, street: content, city: content}
+  # get_balance is private but a bare amount; tainting numbers as secret would
+  # block ordinary payments, so it is left unlabelled.
+
+  # --- slack -----------------------------------------------------------------------
+  - tool: get_channels
+    labels: [source_untrusted]
+  - tool: read_channel_messages
+    labels: [source_untrusted]
+  - tool: read_inbox
+    labels: [source_untrusted]
+  - tool: get_users_in_channel
+    labels: [source_untrusted]
+  - tool: send_direct_message
+    labels: [sink]
+    args: {recipient: destination, body: content}
+  - tool: send_channel_message
+    labels: [sink]
+    args: {channel: destination, body: content}
+  - tool: invite_user_to_slack
+    labels: [sink]
+    args: {user_email: destination, user: content}
+  - tool: add_user_to_channel
+    labels: [sink]
+    args: {user: destination, channel: content}
+  # remove_user_from_slack sends no data.
+
+  # --- web (slack suite) ---------------------------------------------------------
+  - tool: get_webpage
+    # Reads attacker-controlled pages, and the URL itself can carry data out.
+    labels: [source_untrusted, sink]
+    args: {url: destination}
+  - tool: post_webpage
+    labels: [sink]
+    args: {url: destination, content: content}

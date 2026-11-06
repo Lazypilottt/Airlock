@@ -12,22 +12,36 @@ def _average(values: list[bool]) -> str:
 
 
 def render(paths: list[Path]) -> str:
+    """One row per results file.
+
+    AgentDojo's ``security`` result is the injection task's own check: True
+    means the attacker's goal was carried out, so the attack success rate is
+    the share of True values.
+    """
     rows = [
-        "| Configuration | Benign utility | Utility under attack | Targeted attack success rate |",
-        "|---|---:|---:|---:|",
+        "| Configuration | Benign utility | Utility under attack "
+        "| Targeted attack success rate | Calls blocked (of which ASK) |",
+        "|---|---:|---:|---:|---:|",
     ]
     for path in paths:
         data = json.loads(path.read_text(encoding="utf-8"))
         benign: list[bool] = []
         attacked: list[bool] = []
-        security: list[bool] = []
+        attack_succeeded: list[bool] = []
         for suite in data.get("suites", {}).values():
             benign.extend(suite.get("utility", []))
             attacked.extend(suite.get("injection_utility", []))
-            security.extend(not value for value in suite.get("security", []))
+            attack_succeeded.extend(bool(value) for value in suite.get("security", []))
+        stats = data.get("airlock") or {}
+        blocked = (
+            f"{stats.get('calls_denied', 0) + stats.get('calls_asked', 0)} "
+            f"({stats.get('calls_asked', 0)})"
+            if stats
+            else "n/a"
+        )
         rows.append(
             f"| {data['config']} | {_average(benign)} | "
-            f"{_average(attacked)} | {_average(security)} |"
+            f"{_average(attacked)} | {_average(attack_succeeded)} | {blocked} |"
         )
     return "\n".join(rows)
 
