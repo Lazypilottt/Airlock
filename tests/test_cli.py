@@ -26,7 +26,18 @@ ALL_COMMANDS: list[str] = [
 PLACEHOLDER_COMMANDS: list[str] = [
     cmd
     for cmd in ALL_COMMANDS
-    if cmd not in ("wrap", "logs", "tools", "policy", "honeytokens", "init", "uninstall", "report")
+    if cmd
+    not in (
+        "wrap",
+        "logs",
+        "tools",
+        "policy",
+        "honeytokens",
+        "init",
+        "uninstall",
+        "report",
+        "serve",
+    )
 ]
 
 

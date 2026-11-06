@@ -130,7 +130,8 @@ def test_init_wraps_stdio_servers_and_keeps_everything_else(home: Path) -> None:
     original = path.read_bytes()
     result = _run("init", "--client", "claude-desktop", "--yes", "--airlock-command", AIRLOCK)
     assert result.exit_code == 0, result.output
-    assert "skip  remote-notes: remote HTTP server" in result.output
+    assert "remote remote-notes: https://notes.example/mcp" in result.output
+    assert "rerun with --remote" in result.output
     data = json.loads(path.read_text(encoding="utf-8"))
     servers = data["mcpServers"]
     assert servers["filesystem"] == {
@@ -175,7 +176,7 @@ def test_init_handles_cursor_and_existing_wrappers(home: Path) -> None:
     assert servers["fetch"]["args"] == ["wrap", "--name", "fetch", "--", "uvx", "mcp-server-fetch"]
     assert servers["linear"] == CURSOR_CONFIG["mcpServers"]["linear"]
     assert servers["old"] == CURSOR_CONFIG["mcpServers"]["old"]
-    assert "skip  linear: remote HTTP server" in result.output
+    assert "remote linear: https://mcp.linear.app/mcp" in result.output
     assert "skip  old: already wrapped" in result.output
 
 

@@ -82,6 +82,27 @@ Config locations: Claude Desktop uses
 `~/.config/Claude/claude_desktop_config.json` (Linux); Cursor uses
 `~/.cursor/mcp.json`. Restart the app after `init` or `uninstall`.
 
+### Remote (HTTP) servers
+
+`airlock serve` puts Airlock in front of a remote Streamable HTTP MCP server:
+
+```bash
+uv run airlock serve --upstream https://mcp.example.com/mcp --listen 127.0.0.1:8765 --name example
+```
+
+Point the client at `http://127.0.0.1:8765/mcp`. The same checks as in stdio
+mode apply to `tools/list` and `tools/call`; everything else, including
+progress notifications on SSE streams, is streamed through as it arrives.
+`Authorization`, session and protocol headers pass through unchanged, so
+servers on the 2026-07-28 protocol and on earlier Streamable HTTP revisions
+(sessions, GET streams) both work. Browser `Origin`s other than localhost are
+refused (`--allow-origin` adds one).
+
+`airlock init --remote` does this for you: it points each remote server in
+the client config at its own local port and records the original URL, and a
+bare `airlock serve` then runs all of them. Keep it running while the client
+is open; `airlock uninstall` restores the original URLs.
+
 ### Shadow mode and reports
 
 In shadow mode (`mode: shadow`, `airlock wrap --mode shadow` or

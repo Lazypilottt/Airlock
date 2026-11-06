@@ -32,7 +32,22 @@ with respect to the classifier, not an indication that the result is benign.
 
 ## Placeholder CLI commands
 
-`serve`, `attack` and `dashboard` are placeholders.
+`attack` and `dashboard` are placeholders.
+
+## `airlock serve`
+
+- Tokens pass through unchanged, so static bearer tokens work. OAuth flows
+  that discover the authorization server through the endpoint URL see the
+  local proxy URL as the resource, which some servers reject; point those
+  clients at the server directly until this is handled.
+- A `notifications/tools/list_changed` is passed on to the client, which
+  re-lists the tools through the proxy (where rug pulls are caught). Unlike
+  stdio mode, Airlock does not re-list on its own.
+- Every request through one `airlock serve` process shares one engine
+  session (taint is tracked across all its servers), except legacy clients
+  that send `Mcp-Session-Id`, which get one session each.
+- JSON-RPC batches are refused (removed from the protocol in 2025-06-18), so
+  every call stays inspectable.
 
 ## `airlock init`
 

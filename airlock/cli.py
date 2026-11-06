@@ -413,12 +413,6 @@ def tools_reset(
 # =========================================================================
 
 
-@app.command()
-def serve() -> None:
-    """Start the Airlock proxy service."""
-    _not_implemented()
-
-
 ClientOption = Annotated[
     Client,
     typer.Option("--client", help="Which app's MCP config to change."),
@@ -434,6 +428,22 @@ ConfigPathOption = Annotated[
 YesOption = Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")]
 
 
+def _data_dir() -> Path:
+    try:
+        return load_config().data_dir
+    except ConfigError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        raise typer.Exit(code=1) from exc
+
+
+def _remote_map(data_dir: Path) -> list[install.RemoteEntry]:
+    try:
+        return install.load_remote_map(data_dir)
+    except install.InstallError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        raise typer.Exit(code=1) from exc
+
+
 @app.command()
 def init(
     client: ClientOption = Client.all,
@@ -442,22 +452,32 @@ def init(
         Mode | None,
         typer.Option("--mode", help="Wrap servers in shadow mode: log only, block nothing."),
     ] = None,
+    remote: Annotated[
+        bool | None,
+        typer.Option(
+            "--remote/--no-remote",
+            help="Route remote HTTP servers through a local `airlock serve` "
+            "(asked when not given; off with --yes).",
+        ),
+    ] = None,
     yes: YesOption = False,
     airlock_command: Annotated[
         str | None,
         typer.Option("--airlock-command", help="Command written into the configs."),
     ] = None,
 ) -> None:
-    """Wrap the stdio MCP servers of Claude Desktop and Cursor with Airlock."""
+    """Wrap the MCP servers of Claude Desktop and Cursor with Airlock."""
     targets = _targets(client, config_path)
     if not targets:
         print(f"No MCP client config found. Looked in: {_looked_in(client)}")
         print("Pass --config-path to point at one.")
     command = airlock_command or install.default_airlock_command()
+    data_dir = _data_dir()
+    remote_map = _remote_map(data_dir)
     plans: list[tuple[str, install.ConfigPlan]] = []
     for label, path in targets:
         try:
-            config_plan = install.plan(path)
+            config_plan = install.plan(path, remote_map)
         except install.InstallError as exc:
             sys.stderr.write(f"Error: {exc}\n")
             raise typer.Exit(code=1) from exc
@@ -466,31 +486,66 @@ def init(
         if not config_plan.servers:
             print("  no servers configured")
         for server in config_plan.servers:
+            entry = config_plan.data["mcpServers"][server.name]
             if server.status == "wrap":
-                entry = config_plan.data["mcpServers"][server.name]
                 original = " ".join([entry["command"], *map(str, entry.get("args", []))])
                 print(f"  wrap  {server.name}: {original}")
+            elif server.status == "remote" and isinstance(entry.get("url"), str):
+                print(f"  remote {server.name}: {entry['url']}")
             else:
                 print(f"  skip  {server.name}: {server.note}")
 
-    pending = [(label, plan_) for label, plan_ in plans if plan_.to_wrap]
+    routable = sum(
+        1
+        for _, plan_ in plans
+        for server in plan_.remote
+        if isinstance(plan_.data["mcpServers"][server.name].get("url"), str)
+    )
+    if routable and remote is None:
+        if yes:
+            remote = False
+            print(
+                f"\n{routable} remote server(s) left as they are; "
+                "rerun with --remote to route them through `airlock serve`."
+            )
+        else:
+            remote = typer.confirm(
+                f"\nAlso route {routable} remote server(s) through a local `airlock serve`? "
+                "It must then be running for those servers to work",
+                default=False,
+            )
+    route = bool(remote) and routable > 0
+
+    pending = [
+        (label, plan_) for label, plan_ in plans if plan_.to_wrap or (route and plan_.remote)
+    ]
     if pending:
         count = sum(len(plan_.to_wrap) for _, plan_ in pending)
         shadow = " in shadow mode" if mode is Mode.shadow else ""
-        if not yes and not typer.confirm(
-            f"\nWrap {count} server(s){shadow} with {command}?", default=False
-        ):
+        question = f"\nWrap {count} server(s){shadow} with {command}"
+        question += f" and route {routable} remote server(s)?" if route else "?"
+        if not yes and not typer.confirm(question, default=False):
             print("Nothing changed.")
             raise typer.Exit(code=1)
+        added: list[install.RemoteEntry] = []
         for _label, config_plan in pending:
             try:
-                saved = install.apply_init(
-                    config_plan, command, mode.value if mode is Mode.shadow else None
+                saved, new_remote = install.apply_init(
+                    config_plan,
+                    command,
+                    mode.value if mode is Mode.shadow else None,
+                    remote_map=[*remote_map, *added] if route else None,
                 )
             except (OSError, install.InstallError) as exc:
                 sys.stderr.write(f"Error: could not update {config_plan.path}: {exc}\n")
                 raise typer.Exit(code=1) from exc
+            added.extend(new_remote)
             print(f"Updated {config_plan.path} (backup: {saved})")
+        if added:
+            install.save_remote_map(data_dir, [*remote_map, *added])
+            for entry in added:
+                print(f"  {entry.name}: {entry.local_url} -> {entry.upstream}")
+            print("Keep `airlock serve` running (no arguments) for the routed remote servers.")
         apps = ", ".join(sorted({label for label, _ in pending}))
         print(f"Restart {apps} to load the wrapped servers. Undo with `airlock uninstall`.")
     elif plans:
@@ -519,6 +574,9 @@ def uninstall(
     if not targets:
         print(f"No MCP client config found. Looked in: {_looked_in(client)}")
         return
+    data_dir = _data_dir()
+    remote_map = _remote_map(data_dir)
+    forget: set[str] = set()
     for label, path in targets:
         saved = install.latest_backup(path)
         if saved is not None:
@@ -528,21 +586,109 @@ def uninstall(
             )
             if yes or typer.confirm(question, default=False):
                 install.restore(path, saved)
+                forget.add(str(path))
                 print(f"Restored {path} from {saved}")
             continue
         try:
-            config_plan = install.plan(path)
+            config_plan = install.plan(path, remote_map)
         except install.InstallError as exc:
             sys.stderr.write(f"Error: {exc}\n")
             raise typer.Exit(code=1) from exc
-        names = [server.name for server in config_plan.wrapped]
+        names = [server.name for server in config_plan.wrapped + config_plan.proxied]
         if not names:
             print(f"{label}: nothing wrapped in {path}")
             continue
         question = f"{label}: no backup found; unwrap {', '.join(names)} in {path}?"
         if yes or typer.confirm(question, default=False):
-            install.apply_unwrap_in_place(config_plan)
+            install.apply_unwrap_in_place(config_plan, remote_map)
+            forget.add(str(path))
             print(f"Unwrapped {', '.join(names)} in {path}")
+    kept = [entry for entry in remote_map if entry.config not in forget]
+    if len(kept) != len(remote_map):
+        install.save_remote_map(data_dir, kept)
+
+
+@app.command()
+def serve(
+    upstream: Annotated[
+        str | None,
+        typer.Option(
+            "--upstream",
+            help="Remote MCP endpoint URL. Without it, serve every remote server "
+            "`airlock init --remote` routed here.",
+        ),
+    ] = None,
+    listen: Annotated[
+        str, typer.Option("--listen", help="host:port for the local endpoint.")
+    ] = "127.0.0.1:8765",
+    name: Annotated[
+        str | None, typer.Option("--name", "-n", help="Server name (default: upstream host).")
+    ] = None,
+    allow_origin: Annotated[
+        list[str] | None,
+        typer.Option("--allow-origin", help="Extra browser Origin to accept (repeatable)."),
+    ] = None,
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to airlock.yaml configuration file."),
+    ] = None,
+    mode: Annotated[
+        Mode | None,
+        typer.Option("--mode", help="shadow: log what would happen, block nothing."),
+    ] = None,
+) -> None:
+    """Proxy remote Streamable HTTP MCP servers through Airlock."""
+    from urllib.parse import urlsplit
+
+    from airlock.transport.http import HttpProxy, serve_proxies
+
+    try:
+        cfg = load_config(config)
+        if mode is not None:
+            cfg = cfg.model_copy(update={"mode": mode.value})
+    except ConfigError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        raise typer.Exit(code=1) from exc
+
+    targets: list[tuple[str, str, str, int]] = []
+    if upstream is not None:
+        host, _, port_text = listen.rpartition(":")
+        if not host or not port_text.isdigit():
+            sys.stderr.write(f"Error: --listen must be host:port, got {listen!r}\n")
+            raise typer.Exit(code=1)
+        server_name = name or urlsplit(upstream).hostname or "remote"
+        targets.append((server_name, upstream, host.strip("[]"), int(port_text)))
+    else:
+        for entry in _remote_map(cfg.data_dir):
+            targets.append((entry.name, entry.upstream, "127.0.0.1", entry.port))
+    if not targets:
+        sys.stderr.write(
+            "Error: nothing to serve. Pass --upstream, or route remote servers with "
+            "`airlock init --remote`.\n"
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        engine = build_engine(cfg)
+    except PolicyError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        raise typer.Exit(code=1) from exc
+    if mode is not None:
+        engine.mode_override = mode.value
+    origins = tuple(allow_origin or ())
+    proxies = []
+    for server_name, url, host, port in targets:
+        if host not in {"127.0.0.1", "localhost", "::1"}:
+            sys.stderr.write(
+                f"Warning: listening on {host}; anything that can reach it can use "
+                f"{server_name} through Airlock.\n"
+            )
+        proxies.append((HttpProxy(engine, url, server_name, allowed_origins=origins), host, port))
+        sys.stderr.write(f"airlock serve: {server_name}: http://{host}:{port} -> {url}\n")
+    try:
+        asyncio.run(serve_proxies(proxies))
+    except KeyboardInterrupt:
+        pass
 
 
 @app.command()

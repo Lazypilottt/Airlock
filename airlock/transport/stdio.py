@@ -66,7 +66,13 @@ class _ClientState:
 
 
 def _note_client(engine: Engine, server_id: str, client: _ClientState, params: Any) -> None:
-    info = params.get("clientInfo") if isinstance(params, dict) else None
+    """Record the client's name: from ``_meta`` (2026-07-28) or ``initialize`` (earlier)."""
+    if not isinstance(params, dict):
+        return
+    meta = params.get("_meta")
+    info = meta.get("io.modelcontextprotocol/clientInfo") if isinstance(meta, dict) else None
+    if info is None:
+        info = params.get("clientInfo")
     name = info.get("name") if isinstance(info, dict) else None
     if not isinstance(name, str) or not name.strip():
         return
@@ -253,7 +259,7 @@ async def _client_loop(
             _write_error(write_stdout, None, -32600, "Invalid Request")
             continue
 
-        if method == "initialize":
+        if method == "initialize" or client.name is None:
             _note_client(engine, server_id, client, msg.get("params"))
 
         if method == "tools/call":
