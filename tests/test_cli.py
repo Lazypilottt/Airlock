@@ -37,6 +37,7 @@ PLACEHOLDER_COMMANDS: list[str] = [
         "uninstall",
         "report",
         "serve",
+        "dashboard",
     )
 ]
 

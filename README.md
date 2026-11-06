@@ -305,6 +305,20 @@ uv run airlock tools export-pack my-server -o packs/labels/my-server.yaml
 The Anthropic provider uses the official SDK (`autolabel` extra); the
 OpenAI-compatible one needs nothing extra.
 
+### Dashboard
+
+```bash
+uv run airlock dashboard        # prints a one-time link on 127.0.0.1
+```
+
+A live timeline of decisions with filters, each decision's reasons, rule,
+scores and masked previews, a flow view of stopped taint (source tool →
+value → sink tool), the tools page with labels, hashes and approve buttons,
+and the report. "Mark as false positive" saves the decision to
+`data_dir/feedback/` for the next classifier training round. It listens on
+127.0.0.1 only, needs the one-time link (then a strict session cookie), and
+loads nothing from the internet.
+
 ### Choosing the classifier
 
 The optional L2 classifier is Prompt Guard 2 by default. Airlock's own model,

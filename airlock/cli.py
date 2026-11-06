@@ -899,9 +899,25 @@ def attack() -> None:
 
 
 @app.command()
-def dashboard() -> None:
-    """Launch the local web dashboard."""
-    _not_implemented()
+def dashboard(
+    port: Annotated[
+        int | None,
+        typer.Option("--port", help="Port on 127.0.0.1 (default: a random free port)."),
+    ] = None,
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to airlock.yaml configuration file."),
+    ] = None,
+) -> None:
+    """Open the local web dashboard (127.0.0.1 only, one-time access link)."""
+    from airlock.dashboard.app import run
+
+    try:
+        cfg = load_config(config)
+    except ConfigError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        raise typer.Exit(code=1) from exc
+    run(cfg, port)
 
 
 def main() -> None:

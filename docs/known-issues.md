@@ -32,7 +32,7 @@ with respect to the classifier, not an indication that the result is benign.
 
 ## Placeholder CLI commands
 
-`attack` and `dashboard` are placeholders.
+`attack` is a placeholder.
 
 ## `airlock serve`
 
@@ -86,6 +86,14 @@ with respect to the classifier, not an indication that the result is benign.
 - The OTLP setup (`setup_otlp`) needs the `otel` extra; without it Airlock
   warns and runs without telemetry. Spans are emitted per decision (calls and
   results, including approval rows).
+
+## Dashboard
+
+- Built on Starlette with a small plain-JavaScript file instead of FastAPI and
+  HTMX (no extra installs, no third-party assets). Live updates poll the
+  audit log once a second.
+- The session lives in the dashboard process: restarting it needs the new
+  link it prints.
 
 ## Auto-labelling
 
