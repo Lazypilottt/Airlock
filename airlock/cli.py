@@ -17,7 +17,8 @@ from rich.text import Text
 
 from airlock import install
 from airlock.audit.store import AuditStore
-from airlock.config import ConfigError, find_config_path, load_config
+from airlock.config import AirlockConfig, ConfigError, find_config_path, load_config
+from airlock.engine import Engine
 from airlock.engine_factory import build_engine
 from airlock.honeytokens.cli import honeytokens_app
 from airlock.policy.cli import policy_app
@@ -60,6 +61,16 @@ class ReportFormat(StrEnum):
 
 
 _APP_TITLES = {"claude-desktop": "Claude Desktop", "cursor": "Cursor"}
+
+
+def proxy_engine(cfg: AirlockConfig, mode: Mode | None = None) -> Engine:
+    """The engine `airlock wrap` and `airlock serve` run: the default factory, plus `--mode`."""
+    if mode is not None:
+        cfg = cfg.model_copy(update={"mode": mode.value})
+    engine = build_engine(cfg)
+    if mode is not None:
+        engine.mode_override = mode.value
+    return engine
 
 
 def _targets(client: Client, config_paths: list[Path] | None) -> list[tuple[str, Path]]:
@@ -120,12 +131,7 @@ def wrap(
         raise typer.Exit(code=1)
 
     try:
-        cfg = load_config(config)
-        if mode is not None:
-            cfg = cfg.model_copy(update={"mode": mode.value})
-        engine = build_engine(cfg)
-        if mode is not None:
-            engine.mode_override = mode.value
+        engine = proxy_engine(load_config(config), mode)
     except (ConfigError, PolicyError) as exc:
         sys.stderr.write(f"Error: {exc}\n")
         raise typer.Exit(code=1) from exc
@@ -644,8 +650,6 @@ def serve(
 
     try:
         cfg = load_config(config)
-        if mode is not None:
-            cfg = cfg.model_copy(update={"mode": mode.value})
     except ConfigError as exc:
         sys.stderr.write(f"Error: {exc}\n")
         raise typer.Exit(code=1) from exc
@@ -669,12 +673,10 @@ def serve(
         raise typer.Exit(code=1)
 
     try:
-        engine = build_engine(cfg)
+        engine = proxy_engine(cfg, mode)
     except PolicyError as exc:
         sys.stderr.write(f"Error: {exc}\n")
         raise typer.Exit(code=1) from exc
-    if mode is not None:
-        engine.mode_override = mode.value
     origins = tuple(allow_origin or ())
     proxies = []
     for server_name, url, host, port in targets:

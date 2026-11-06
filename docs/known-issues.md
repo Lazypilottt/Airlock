@@ -1,4 +1,4 @@
-# Known issues before v0.1
+# Known issues
 
 These are explicit limitations of the current release and are not silently
 treated as implemented features.
@@ -101,3 +101,35 @@ with respect to the classifier, not an indication that the result is benign.
 - **Before 0.2 the adapter registered tools one at a time,** which left every
   tool after the first pending and denied. Numbers from that adapter are not
   comparable; none were published.
+
+## Limits
+
+Found while trying to get tainted data and honeytokens past Airlock (v0.2
+review). These are caught, with regression tests in `tests/test_review.py`:
+a value split across arguments or inside one argument, spaced out, upper-cased,
+base64, base32, hex, URL-encoded, ROT13, reversed, an email spelled
+`alice [at] evil [dot] example`, and data written through an intermediate tool
+and then sent by reference (a file id returned for tainted data). These are
+not:
+
+- **Paraphrase and summarisation.** Matching is lexical. An agent that
+  rewrites a value in its own words, or sends a summary of a secret document,
+  is not caught.
+- **Stacked encodings.** Each decoding view undoes one layer. ROT13 of base64,
+  base64 of a reversed string, a custom cipher, spelling digits out as words:
+  not caught.
+- **Short values split across arguments.** The joined-arguments scan only
+  reassembles long tokens and API keys; an email address or phone number
+  split across fields is not reassembled.
+- **References other than ids.** Derived taint follows `id` / `*_id` fields
+  returned for a call that carried tainted data, and only matches when an
+  argument is exactly that id. A file name, path or URL to the written data
+  is not followed.
+- **Taint across separately wrapped servers.** Each `airlock wrap` process has
+  its own taint table (see the Task 11 open question); one `airlock serve`
+  shares one table across all its remote servers.
+- **Labels decide what is checked.** A tool that reads secrets but is not
+  labelled `source_secret` (by a pack, the name heuristic or your config)
+  taints nothing.
+- **Expiry.** Taint entries expire after `taint.ttl_seconds` (default one
+  hour) and the table keeps at most `taint.max_entries` values.

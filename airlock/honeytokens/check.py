@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from airlock.honeytokens.store import WatchedHoneytokens
 from airlock.honeytokens.tokens import Honeytoken
 from airlock.models import Decision, ToolCall, Verdict
-from airlock.taint.normalize import views
+from airlock.taint.normalize import compact, views
 from airlock.taint.tracker import walk_arguments
 
 if TYPE_CHECKING:
@@ -55,19 +55,39 @@ class HoneytokenCheck:
         self.alerts = alerts
 
     def scan(self, arguments: dict[str, Any]) -> list[tuple[str, Honeytoken, str]]:
-        """``(argument path, token, how it was encoded)`` for every token found."""
+        """``(argument path, token, how it was encoded)`` for every token found.
+
+        Each argument is checked on its own and all of them joined (path ``*``);
+        long needles are also compared with separators removed, so a token
+        broken up by spaces or dashes, or split across arguments, still hits.
+        """
         planted = self.tokens.tokens()
         if not planted:
             return []
-        needles = [(token.needle.lower(), token) for token in planted]
+        needles = [
+            (token.needle.lower(), compact(token.needle.lower()), token) for token in planted
+        ]
         hits: list[tuple[str, Honeytoken, str]] = []
         seen: set[str] = set()
-        for path, value in walk_arguments(arguments):
+        strings = list(walk_arguments(arguments))
+        if len(strings) > 1:
+            strings.append(("*", "".join(value for _, value in strings)))
+        for path, value in strings:
             for view in views(value):
-                for needle, token in needles:
-                    if token.id not in seen and needle in view.text:
-                        seen.add(token.id)
-                        hits.append((path, token, view.how))
+                squeezed = compact(view.text)
+                for needle, compact_needle, token in needles:
+                    if token.id in seen:
+                        continue
+                    if needle in view.text:
+                        how = view.how
+                    elif len(compact_needle) >= 12 and compact_needle in squeezed:
+                        how = "separators removed" if view.how == "plain" else view.how
+                    else:
+                        continue
+                    seen.add(token.id)
+                    if path == "*":
+                        how = "split across arguments"
+                    hits.append((path, token, how))
         return hits
 
     async def check(self, call: ToolCall, session: Session) -> Decision:

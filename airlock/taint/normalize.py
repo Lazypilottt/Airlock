@@ -8,14 +8,17 @@ Every tainted value gets a *match key* in one of two families:
   IBAN and account numbers, which are written with arbitrary separators.
 
 Outbound argument strings are expanded into *views* (lowercased, URL-decoded,
-punycode-decoded, HTML-unescaped, and base64/hex-decoded blobs) and every view
-is searched for keys of the matching family.
+punycode-decoded, HTML-unescaped, base64/base32/hex-decoded blobs, reversed,
+ROT13, and with spelled-out ``[at]``/``[dot]`` undone) and every view is
+searched for keys of the matching family. Each view undoes one layer; stacked
+encodings (ROT13 of base64, say) are not unwrapped.
 """
 
 from __future__ import annotations
 
 import base64
 import binascii
+import codecs
 import html
 import re
 import unicodedata
@@ -37,6 +40,10 @@ _COMPACT_DROP = re.compile(r"[\s().+/\-_:]")
 # Possessive quantifiers and start-of-run lookbehinds keep these scans linear.
 _BASE64_BLOB = re.compile(r"(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{16,}+={0,2}")
 _HEX_BLOB = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{16,}+")
+_BASE32_BLOB = re.compile(r"(?<![A-Za-z2-7])[A-Za-z2-7]{16,}+={0,6}")
+# "alice [at] evil [dot] example", "alice(at)evil(dot)example", "alice {at} ..."
+_SPELLED_AT = re.compile(r"\s*[\[({<]\s*at\s*[\])}>]\s*", re.IGNORECASE)
+_SPELLED_DOT = re.compile(r"\s*[\[({<]\s*dot\s*[\])}>]\s*", re.IGNORECASE)
 _MAX_DECODE_ROUNDS: Final = 3
 _MAX_BLOBS: Final = 64
 
@@ -147,6 +154,14 @@ def _decode_base64(blob: str) -> str | None:
     return None
 
 
+def _decode_base32(blob: str) -> str | None:
+    padded = blob.rstrip("=") + "=" * (-len(blob.rstrip("=")) % 8)
+    try:
+        return _printable(base64.b32decode(padded, casefold=True))
+    except (binascii.Error, ValueError):
+        return None
+
+
 def _decode_hex(blob: str) -> str | None:
     try:
         return _printable(bytes.fromhex(blob))
@@ -173,6 +188,8 @@ def views(value: str) -> list[View]:
         _add("punycode", decode_punycode_labels(lowered))
     if "&" in cleaned and ";" in cleaned:
         _add("html", html.unescape(cleaned))
+    if _SPELLED_AT.search(cleaned) or _SPELLED_DOT.search(cleaned):
+        _add("deobfuscated", _SPELLED_DOT.sub(".", _SPELLED_AT.sub("@", cleaned)))
 
     blobs = 0
     for match in _BASE64_BLOB.finditer(cleaned):
@@ -191,10 +208,21 @@ def views(value: str) -> list[View]:
         if decoded is not None:
             blobs += 1
             _add("hex", clean(decoded))
+    for match in _BASE32_BLOB.finditer(cleaned):
+        if blobs >= _MAX_BLOBS:
+            break
+        decoded = _decode_base32(match.group(0))
+        if decoded is not None:
+            blobs += 1
+            _add("base32", clean(decoded))
     # A decoded blob may itself be URL-encoded (base64 of a query string, say).
     for view in list(result[1:]):
-        if view.how in {"base64", "hex"} and "%" in view.text:
+        if view.how in {"base64", "base32", "hex"} and "%" in view.text:
             _add(view.how, url_decode(view.text))
+    # Trivial transformations of the whole string.
+    _add("reversed", lowered[::-1])
+    if any(char.isalpha() for char in lowered):
+        _add("rot13", codecs.encode(lowered, "rot13"))
     return result
 
 
