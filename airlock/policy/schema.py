@@ -96,10 +96,10 @@ class ArgCondition(BaseModel):
         return value
 
 
-def _as_list(value: str | list[str] | None) -> list[str] | None:
+def _as_list[S: str](value: S | list[S] | None) -> list[S] | None:
     if value is None:
         return None
-    return [value] if isinstance(value, str) else value
+    return value if isinstance(value, list) else [value]
 
 
 class When(BaseModel):
@@ -342,8 +342,10 @@ def _arg_predicate(condition: ArgCondition) -> Predicate:
 
 @dataclass
 class CompiledRule:
+    """A rule with its conditions turned into ``(condition name, predicate)`` pairs."""
+
     rule: Rule
-    predicates: list[Predicate] = field(default_factory=list)
+    predicates: list[tuple[str, Predicate]] = field(default_factory=list)
     taint_labels: frozenset[str] | None = None
     taint_path: str = "*"
 
@@ -356,38 +358,46 @@ class CompiledRule:
             if signal.label in self.taint_labels and _path_covers(self.taint_path, signal.arg_path)
         )
 
+    def first_failure(self, event: PolicyEvent) -> str | None:
+        """Name of the first condition that does not hold, or ``None`` if the rule matches."""
+        for condition, predicate in self.predicates:
+            if not predicate(event):
+                return condition
+        if self.taint_labels is not None and not self.matching_taint(event):
+            return "arg_tainted_by"
+        return None
+
     def matches(self, event: PolicyEvent) -> bool:
-        if not all(predicate(event) for predicate in self.predicates):
-            return False
-        return self.taint_labels is None or bool(self.matching_taint(event))
+        return self.first_failure(event) is None
 
 
 def compile_rule(rule: Rule) -> CompiledRule:
+    """Turn a rule's conditions into predicates, once, at load time."""
     when = rule.when
     compiled = CompiledRule(rule)
     preds = compiled.predicates
     if when.direction is not None:
         direction = when.direction
-        preds.append(lambda event: event.direction == direction)
+        preds.append(("direction", lambda event: event.direction == direction))
     if when.arg is not None or when.arg_tainted_by is not None:
-        preds.append(lambda event: event.direction == "call")
+        preds.append(("direction", lambda event: event.direction == "call"))
     if when.result_score_above is not None:
-        preds.append(lambda event: event.direction == "result")
+        preds.append(("direction", lambda event: event.direction == "result"))
     if (tools := _as_list(when.tool)) is not None:
         tool_match = _glob_any(tools)
-        preds.append(lambda event: tool_match(event.tool))
+        preds.append(("tool", lambda event: tool_match(event.tool)))
     if (servers := _as_list(when.server)) is not None:
         server_match = _glob_any(servers)
-        preds.append(lambda event: server_match(event.server))
+        preds.append(("server", lambda event: server_match(event.server)))
     if when.labels is not None:
         any_of = frozenset(when.labels.any or ())
         all_of = frozenset(when.labels.all or ())
         if any_of:
-            preds.append(lambda event: bool(event.labels & any_of))
+            preds.append(("labels.any", lambda event: bool(event.labels & any_of)))
         if all_of:
-            preds.append(lambda event: all_of <= event.labels)
+            preds.append(("labels.all", lambda event: all_of <= event.labels))
     if when.arg is not None:
-        preds.append(_arg_predicate(when.arg))
+        preds.append(("arg", _arg_predicate(when.arg)))
     if when.arg_tainted_by is not None:
         labels = when.arg_tainted_by
         compiled.taint_labels = frozenset([labels] if isinstance(labels, str) else labels)
@@ -407,10 +417,10 @@ def compile_rule(rule: Rule) -> CompiledRule:
                 limit = float(threshold)
             return event.score >= limit
 
-        preds.append(_above)
+        preds.append(("result_score_above", _above))
     if when.quarantined is not None:
         wanted = when.quarantined
-        preds.append(lambda event: event.quarantined == wanted)
+        preds.append(("quarantined", lambda event: event.quarantined == wanted))
     return compiled
 
 
@@ -421,6 +431,16 @@ class CompiledPolicy:
         self.policy = policy
         self.origin = origin
         self.rules = [compile_rule(rule) for rule in policy.rules]
+
+    def trace(self, event: PolicyEvent) -> list[tuple[str, str | None]]:
+        """``(rule name, first failing condition or None)`` for each rule up to the winner."""
+        steps: list[tuple[str, str | None]] = []
+        for compiled in self.rules:
+            failure = compiled.first_failure(event)
+            steps.append((compiled.rule.name, failure))
+            if failure is None:
+                break
+        return steps
 
     def evaluate(self, event: PolicyEvent) -> PolicyMatch:
         for compiled in self.rules:
@@ -496,8 +516,9 @@ def explain_rule(rule: Rule) -> str:
             parts.append(f"matches the regular expression {arg.matches!r}")
         clauses.append(f"{arg_name} {_and(parts)}" if parts else f"{arg_name} is present")
     if when.arg_tainted_by is not None:
-        labels = [when.arg_tainted_by] if isinstance(when.arg_tainted_by, str) else when.arg_tainted_by
-        clauses.append(f"{arg_name} contains a value from {_or([f'a {l} source' for l in labels])}")
+        tainted = _as_list(when.arg_tainted_by) or []
+        sources = [f"{'an' if label[0] in 'aeiou' else 'a'} {label} source" for label in tainted]
+        clauses.append(f"{arg_name} contains a value from {_or(sources)}")
     if when.result_score_above is not None:
         threshold = when.result_score_above
         limit = (
@@ -521,11 +542,46 @@ def explain_rule(rule: Rule) -> str:
 
 
 def explain_policy(policy: Policy) -> list[str]:
+    """One sentence per rule, then the default and the mode."""
     lines = [explain_rule(rule) for rule in policy.rules]
     lines.append(f"If no rule matches: {_VERB[policy.default]}.")
     if policy.mode == "shadow":
         lines.append("Shadow mode: verdicts are logged but not enforced.")
     return lines
+
+
+def coverage_warnings(policy: Policy) -> list[str]:
+    """Protections the policy no longer provides.
+
+    With a policy loaded, taint hits, detector scores and quarantine status are
+    evidence: only rules turn them into verdicts. A policy without such a rule
+    silently lets that traffic through (or blocks it, with ``default: deny``).
+    """
+    if policy.default == "deny":
+        return []
+    rules = policy.rules
+    tainted: set[str] = set()
+    for rule in rules:
+        rule_labels = _as_list(rule.when.arg_tainted_by)
+        if rule_labels:
+            tainted.update(rule_labels)
+    warnings: list[str] = []
+    for label in ("secret", "untrusted"):
+        if label not in tainted:
+            warnings.append(
+                f"No rule uses arg_tainted_by: {label}; values from {label} sources "
+                "reach sinks unchecked."
+            )
+    if not any(rule.when.result_score_above is not None for rule in rules):
+        warnings.append(
+            "No rule uses result_score_above; tool results that look like prompt "
+            "injection are passed through."
+        )
+    if not any(rule.when.quarantined for rule in rules):
+        warnings.append(
+            "No rule uses quarantined: true; tools whose definition changed can still be called."
+        )
+    return warnings
 
 
 __all__ = [
@@ -540,6 +596,7 @@ __all__ = [
     "TaintSignal",
     "When",
     "compile_rule",
+    "coverage_warnings",
     "domains_in",
     "explain_policy",
     "explain_rule",

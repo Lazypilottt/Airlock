@@ -13,7 +13,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from airlock.engine import Engine
-from airlock.models import ToolCall, ToolResult, Verdict
+from airlock.models import Decision, ToolCall, ToolResult, Verdict
 
 _MAX_LINE_BYTES = 1_048_576
 _MAX_PENDING_REQUESTS = 4096
@@ -57,6 +57,62 @@ def _write_error(
     )
 
 
+def _blocked_result(reasons: Sequence[str]) -> dict[str, Any]:
+    reasons_text = "; ".join(reasons) if reasons else "Blocked by policy"
+    return {
+        "content": [{"type": "text", "text": f"Blocked by Airlock: {reasons_text}"}],
+        "isError": True,
+    }
+
+
+async def _approve_call(
+    engine: Engine,
+    call: ToolCall,
+    decision: Decision,
+    line: str,
+    child_stdin: asyncio.StreamWriter,
+    write_stdout: Callable[[str], None],
+    pending_requests: dict[Any, dict[str, Any]],
+) -> None:
+    """Ask a human about a call; forward it to the server only if they allow it."""
+    msg_id = call.request_id if call.request_id != "no-id" else None
+    try:
+        final = await engine.resolve_ask(call, decision)
+    except Exception as exc:
+        _log_warning(f"Approval failed: {type(exc).__name__}: {exc}")
+        final = Decision(verdict=Verdict.DENY, reasons=["approval failed; treated as deny"])
+    if final.verdict == Verdict.ALLOW:
+        try:
+            child_stdin.write((line + "\n").encode("utf-8"))
+            await child_stdin.drain()
+            return
+        except Exception as exc:
+            _log_warning(f"Could not forward approved call: {exc}")
+            final = Decision(verdict=Verdict.DENY, reasons=["the server is no longer reachable"])
+    pending_requests.pop(msg_id, None)
+    write_stdout(
+        json.dumps({"jsonrpc": "2.0", "id": msg_id, "result": _blocked_result(final.reasons)})
+    )
+
+
+async def _approve_result(
+    engine: Engine,
+    result: ToolResult,
+    decision: Decision,
+    msg: dict[str, Any],
+    write_stdout: Callable[[str], None],
+) -> None:
+    """Ask a human whether a tool result may reach the client."""
+    try:
+        final = await engine.resolve_ask(result, decision)
+    except Exception as exc:
+        _log_warning(f"Approval failed: {type(exc).__name__}: {exc}")
+        final = Decision(verdict=Verdict.DENY, reasons=["approval failed; treated as deny"])
+    if final.verdict != Verdict.ALLOW:
+        msg["result"] = _blocked_result(final.reasons)
+    write_stdout(json.dumps(msg))
+
+
 def _valid_request_id(value: object) -> bool:
     return value is None or (isinstance(value, (str, int)) and not isinstance(value, bool))
 
@@ -88,7 +144,40 @@ async def _client_to_server_relay(
     pending_requests: dict[Any, dict[str, Any]],
     stop_event: asyncio.Event,
 ) -> None:
-    """Read lines from client stdin, apply outbound checks, and forward to server."""
+    """Read lines from client stdin, apply outbound checks, and forward to server.
+
+    A call that needs approval waits in its own task, so other requests (and
+    cancellations, pings) keep flowing while the human decides.
+    """
+    approvals: set[asyncio.Task[None]] = set()
+    try:
+        await _client_loop(
+            stdin_reader,
+            child_stdin,
+            write_stdout,
+            engine,
+            session_id,
+            server_id,
+            pending_requests,
+            stop_event,
+            approvals,
+        )
+    finally:
+        for task in approvals:
+            task.cancel()
+
+
+async def _client_loop(
+    stdin_reader: asyncio.StreamReader | None,
+    child_stdin: asyncio.StreamWriter,
+    write_stdout: Callable[[str], None],
+    engine: Engine,
+    session_id: str,
+    server_id: str,
+    pending_requests: dict[Any, dict[str, Any]],
+    stop_event: asyncio.Event,
+    approvals: set[asyncio.Task[None]],
+) -> None:
     while not stop_event.is_set():
         if stdin_reader is not None:
             raw_bytes = await stdin_reader.readline()
@@ -162,46 +251,27 @@ async def _client_to_server_relay(
 
             if decision.verdict == Verdict.DENY:
                 # Do not forward; answer client directly with isError=True
-                reasons_text = (
-                    "; ".join(decision.reasons) if decision.reasons else "Blocked by policy"
-                )
                 response = {
                     "jsonrpc": "2.0",
                     "id": msg_id,
-                    "result": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": f"Blocked by Airlock: {reasons_text}",
-                            }
-                        ],
-                        "isError": True,
-                    },
+                    "result": _blocked_result(decision.reasons),
                 }
                 write_stdout(json.dumps(response))
                 pending_requests.pop(msg_id, None)
                 continue
 
             elif decision.verdict == Verdict.ASK:
-                # Treat as DENY with reason "approval required" until approvals exist
-                ask_text = "Blocked by Airlock: approval required"
-                if decision.reasons:
-                    ask_text += f" ({'; '.join(decision.reasons)})"
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "result": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": ask_text,
-                            }
-                        ],
-                        "isError": True,
-                    },
-                }
-                write_stdout(json.dumps(response))
-                pending_requests.pop(msg_id, None)
+                if decision.modified_payload is not None:
+                    params["arguments"] = decision.modified_payload
+                    msg["params"] = params
+                    line = json.dumps(msg)
+                task = asyncio.create_task(
+                    _approve_call(
+                        engine, call, decision, line, child_stdin, write_stdout, pending_requests
+                    )
+                )
+                approvals.add(task)
+                task.add_done_callback(approvals.discard)
                 continue
 
             elif decision.verdict == Verdict.REDACT:
@@ -370,19 +440,16 @@ async def _server_to_client_relay(
                     decision = await engine.on_tool_result(tool_result)
 
                     if decision.verdict == Verdict.DENY:
-                        reasons_text = (
-                            "; ".join(decision.reasons) if decision.reasons else "Blocked by policy"
-                        )
-                        msg["result"] = {
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": f"Blocked by Airlock: {reasons_text}",
-                                }
-                            ],
-                            "isError": True,
-                        }
+                        msg["result"] = _blocked_result(decision.reasons)
                         line = json.dumps(msg)
+
+                    elif decision.verdict == Verdict.ASK:
+                        task = asyncio.create_task(
+                            _approve_result(engine, tool_result, decision, msg, write_stdout)
+                        )
+                        bg_tasks.add(task)
+                        task.add_done_callback(bg_tasks.discard)
+                        continue
 
                     elif decision.verdict == Verdict.REDACT:
                         if decision.modified_payload is not None:

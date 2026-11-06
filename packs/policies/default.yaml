@@ -1,0 +1,53 @@
+# Airlock default policy.
+#
+# Loaded when `policy:` is not set in airlock.yaml. Copy it, edit it and point
+# `policy:` at your copy; Airlock reloads the file when it changes.
+# `airlock policy check <file>` explains every rule in plain English.
+#
+# Rules are checked in order and the first match decides. Taint hits, detector
+# scores and quarantine status are only evidence: these rules turn them into
+# verdicts, so removing a rule removes that protection.
+
+default: allow
+
+rules:
+  - name: block-quarantined-tools
+    when:
+      direction: call
+      quarantined: true
+    then: deny
+    message: >-
+      This tool's definition changed after it was approved. Review it with
+      `airlock tools diff` and approve it with `airlock tools approve`.
+
+  - name: deny-secrets-to-sinks
+    when:
+      direction: call
+      labels: {any: [sink]}
+      arg_tainted_by: secret
+    then: deny
+    message: A value read from a secret source is about to be sent out.
+
+  - name: ask-untrusted-to-sinks
+    when:
+      direction: call
+      labels: {any: [sink]}
+      arg_tainted_by: untrusted
+    then: ask
+    message: A value read from an untrusted source is about to be sent out.
+
+  - name: block-injected-results
+    when:
+      direction: result
+      result_score_above: block_above
+    then: deny
+    message: >-
+      This tool result was withheld because it may contain prompt injection.
+      You can continue with another request.
+
+  - name: redact-suspicious-results
+    when:
+      direction: result
+      result_score_above: redact_above
+    then: redact
+    message: Possible prompt injection was removed from this tool result.

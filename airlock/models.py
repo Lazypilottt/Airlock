@@ -67,6 +67,9 @@ class Decision(BaseModel):
     scores: dict[str, float] = Field(default_factory=dict)
     modified_payload: Any | None = None
     latency_ms: float = 0.0
+    # What a check observed (taint hits, detector scores...) for the policy to
+    # judge. In-process only: never serialised or logged.
+    evidence: dict[str, Any] = Field(default_factory=dict, exclude=True, repr=False)
 
 
 __all__ = [

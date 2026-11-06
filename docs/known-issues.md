@@ -6,8 +6,12 @@ treated as implemented features.
 ## Outbound policy layers
 
 The default engine (`airlock.engine_factory.build_engine`) runs taint tracking
-on calls to tools labelled `sink`. It does not yet run the policy engine or the
-honeytoken check (planned for v0.2).
+and the policy engine (the bundled default policy unless `policy:` is set). It
+does not yet run the honeytoken check (planned for v0.2).
+
+With a policy loaded, taint hits, detector scores and quarantine status only
+become verdicts through rules. A custom policy that leaves out one of the
+default rules removes that protection; `airlock policy check` warns about it.
 
 Each `airlock wrap` process keeps its own taint table, so a value read through
 one wrapped server and sent through a different wrapped server is not caught.
@@ -28,6 +32,17 @@ with respect to the classifier, not an indication that the result is benign.
 
 ## Placeholder CLI commands
 
-`serve`, `init`, `policy`, `honeytokens`, `report`, and `uninstall` are
-placeholders. Use `wrap`, `tools`, and `logs` for the currently implemented
-CLI surface.
+`serve`, `init`, `honeytokens`, `report`, and `uninstall` are placeholders.
+Use `wrap`, `tools`, `policy` and `logs` for the currently implemented CLI
+surface.
+
+## Terminal approvals
+
+- Approvals need a controlling terminal. MCP servers started by desktop apps
+  have none, so every `ask` is denied there (and the reason says so).
+- A full-screen terminal client reads the same terminal. Airlock accepts a
+  single key when the terminal is in raw mode, but the client may consume the
+  keystroke first.
+- The Windows console path is implemented but untested.
+- A call cancelled by the client while its approval prompt is open is still
+  forwarded if you then approve it.

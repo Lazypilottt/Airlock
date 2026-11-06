@@ -62,6 +62,51 @@ configuration file. `airlock serve` and `airlock init` are reserved for a
 future standalone service/configuration workflow; `wrap` is the current proxy
 entry point.
 
+### Policies and approvals
+
+A policy is an ordered list of rules; the first rule whose conditions all hold
+decides the verdict (`allow`, `deny`, `redact` or `ask`). Taint hits, detector
+scores and quarantine status are evidence that rules turn into verdicts. With
+no `policy:` in `airlock.yaml`, `airlock wrap` enforces the bundled
+[`packs/policies/default.yaml`](packs/policies/default.yaml):
+
+- deny sink arguments that carry a value read from a secret source;
+- ask before sink arguments carry a value read from an untrusted source;
+- block tool results at or above `block_above`, redact them at or above `redact_above`;
+- block tools whose definition changed since approval (quarantined).
+
+```yaml
+# my-policy.yaml
+default: allow
+rules:
+  - name: corp-mail-is-fine
+    when: {tool: send_email, arg: {path: to, domain_in: [mycorp.example]}}
+    then: allow
+  - name: ask-untrusted-to-sinks
+    when: {labels: [sink], arg_tainted_by: untrusted}
+    then: ask
+    message: Data from a web page is about to leave.
+```
+
+Conditions: `tool` and `server` (globs), `labels` (`any`/`all`), `direction`
+(`call`/`result`), `arg` (`path` plus `domain_in`, `domain_not_in`,
+`max_length` or `matches`), `arg_tainted_by` (`untrusted`/`secret`),
+`result_score_above` (a number, `redact_above` or `block_above`) and
+`quarantined`. Point `policy:` in `airlock.yaml` at your file; it is reloaded
+when it changes, and an invalid edit keeps the previous policy.
+
+```bash
+uv run airlock policy check my-policy.yaml       # validate and explain each rule
+uv run airlock policy test my-policy.yaml --event examples/policy-event.json
+```
+
+An `ask` verdict in stdio mode is put to you on the controlling terminal
+(`/dev/tty`; the console on Windows), because stdin and stdout carry the MCP
+protocol. Answer `y` (once), `s` (for the rest of the session) or `n`. No
+answer within `approvals.timeout_seconds` (default 30) denies the call, and so
+does the absence of a terminal, which is the case when a desktop app launches
+the server. `approvals: {terminal: false}` turns every `ask` into a deny.
+
 ### Optional Prompt Guard 2 classifier
 
 The L2 classifier is optional and is unavailable until the gated Meta model

@@ -183,10 +183,12 @@ class TaintRecordCheck:
 
 
 class TaintCheck:
-    """Call check: stop tainted values from reaching tools labelled ``sink``.
+    """Call check: find tainted values in a call's arguments.
 
-    Until the policy engine (Task 12) decides verdicts, untrusted taint gives
-    ASK and secret taint gives DENY.
+    Every call is scanned and its hits go into ``Decision.evidence["taint"]``
+    for the policy, which decides the verdict. On an engine without a policy,
+    the check decides itself for tools labelled ``sink``: ASK for untrusted
+    taint, DENY for secret taint.
     """
 
     name = "taint"
@@ -231,18 +233,23 @@ class TaintCheck:
 
     async def check(self, call: ToolCall, session: Session) -> Decision:
         labels = self.labels_for(call.server_id, call.tool_name)
-        if not labels.is_sink:
-            return Decision(verdict=Verdict.ALLOW)
-        hits = self.scan(call, session)
-        if not hits:
-            return Decision(verdict=Verdict.ALLOW, scores={"taint.hits": 0.0})
-        secret = any(hit.label == "secret" for hit in hits)
-        ordered = sorted(hits, key=lambda hit: hit.label != "secret")
+        hits = sorted(self.scan(call, session), key=lambda hit: hit.label != "secret")
+        evidence = {
+            "taint": [
+                {"path": hit.arg_path, "label": hit.label, "reason": self.reason(hit, session)}
+                for hit in hits
+            ]
+        }
+        scores = {"taint.hits": float(len(hits))}
+        if not labels.is_sink or not hits:
+            return Decision(verdict=Verdict.ALLOW, scores=scores, evidence=evidence)
+        secret = hits[0].label == "secret"
         return Decision(
             verdict=Verdict.DENY if secret else Verdict.ASK,
             rule="taint:secret" if secret else "taint:untrusted",
-            reasons=[self.reason(hit, session) for hit in ordered[:5]],
-            scores={"taint.hits": float(len(hits))},
+            reasons=[item["reason"] for item in evidence["taint"][:5]],
+            scores=scores,
+            evidence=evidence,
         )
 
 

@@ -14,8 +14,10 @@ from rich.console import Console
 from rich.table import Table
 
 from airlock.audit.store import AuditStore
-from airlock.config import load_config
+from airlock.config import ConfigError, load_config
 from airlock.engine_factory import build_engine
+from airlock.policy.cli import policy_app
+from airlock.policy.schema import PolicyError
 from airlock.registry.store import ToolRegistry, labels_from_row
 from airlock.transport.stdio import run_stdio_proxy
 
@@ -31,6 +33,7 @@ tools_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(tools_app, name="tools")
+app.add_typer(policy_app, name="policy")
 
 
 def _not_implemented() -> None:
@@ -62,8 +65,12 @@ def wrap(
         sys.stderr.write("Error: No command specified to wrap.\n")
         raise typer.Exit(code=1)
 
-    cfg = load_config(config)
-    engine = build_engine(cfg)
+    try:
+        cfg = load_config(config)
+        engine = build_engine(cfg)
+    except (ConfigError, PolicyError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        raise typer.Exit(code=1) from exc
 
     exit_code = asyncio.run(run_stdio_proxy(full_cmd, name=name, engine=engine))
     raise typer.Exit(code=exit_code)
@@ -348,12 +355,6 @@ def init() -> None:
 @app.command()
 def uninstall() -> None:
     """Uninstall Airlock configurations and wrappers."""
-    _not_implemented()
-
-
-@app.command()
-def policy() -> None:
-    """Inspect and validate security policies."""
     _not_implemented()
 
 

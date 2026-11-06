@@ -407,9 +407,10 @@ async def test_email_from_page_into_send_email_to(tmp_path: Path) -> None:
     await _result(engine, "read_page", f"Contact {EMAIL} for help.")
     decision = await _call(engine, "send_email", to=EMAIL, body="hello")
     assert decision.verdict is Verdict.ASK
-    assert decision.rule == "taint:untrusted"
+    assert decision.rule == "ask-untrusted-to-sinks"
     assert decision.reasons == [
-        f"argument `to` contains {EMAIL}, which came from web.read_page 1 call ago"
+        "A value read from an untrusted source is about to be sent out.",
+        f"argument `to` contains {EMAIL}, which came from web.read_page 1 call ago",
     ]
     await engine.close()
 
@@ -455,7 +456,7 @@ async def test_nested_arguments_are_scanned(tmp_path: Path) -> None:
         engine, "send_email", to="me@self.example", body={"cc": [{"address": EMAIL}]}
     )
     assert decision.verdict is Verdict.ASK
-    assert "argument `body.cc[0].address`" in decision.reasons[0]
+    assert "argument `body.cc[0].address`" in decision.reasons[1]
     await engine.close()
 
 
@@ -485,9 +486,9 @@ async def test_secret_taint_is_denied_and_masked(tmp_path: Path) -> None:
     await _result(engine, "read_env", f"AWS_ACCESS_KEY_ID={secret}")
     decision = await _call(engine, "send_email", to="x@y.example", body=f"key {secret}")
     assert decision.verdict is Verdict.DENY
-    assert decision.rule == "taint:secret"
+    assert decision.rule == "deny-secrets-to-sinks"
     assert secret not in " ".join(decision.reasons)
-    assert "secret" in decision.reasons[0]
+    assert "secret" in decision.reasons[1]
     await engine.close()
 
 
@@ -597,7 +598,11 @@ def test_match_performance_10k_entries_10kb_payload() -> None:
 
 def _wrap_params(tmp_path: Path, extra_yaml: str = "") -> StdioServerParameters:
     config = tmp_path / "airlock.yaml"
-    config.write_text(f"data_dir: {tmp_path / 'data'}\n{extra_yaml}", encoding="utf-8")
+    # No terminal prompts from tests, even when pytest runs in a terminal.
+    config.write_text(
+        f"data_dir: {tmp_path / 'data'}\napprovals: {{terminal: false}}\n{extra_yaml}",
+        encoding="utf-8",
+    )
     env = dict(os.environ)
     env["AIRLOCK_FAKE_SERVER_RECORD_FILE"] = str(tmp_path / "sent.json")
     return StdioServerParameters(

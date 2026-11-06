@@ -82,8 +82,26 @@ class DetectorCascade:
         return CascadeResult(score, tuple(layers), tuple(spans), rule_ids, tuple(reasons))
 
 
+def thresholds_for(config: AirlockConfig, server_id: str, tool_name: str) -> tuple[float, float]:
+    """``(redact_above, block_above)`` for a tool, after tool and server overrides."""
+    override = config.tool_overrides.get(tool_name) or config.server_overrides.get(server_id)
+    return (
+        override.redact_above
+        if override and override.redact_above is not None
+        else config.redact_above,
+        override.block_above
+        if override and override.block_above is not None
+        else config.block_above,
+    )
+
+
 class CascadeResultCheck:
-    """Engine result check for the detector cascade."""
+    """Engine result check for the detector cascade.
+
+    Besides its own verdict (used by engines without a policy), every decision
+    carries ``evidence`` for the policy: the score, the thresholds that apply to
+    this tool, and the payload to send for each possible verdict.
+    """
 
     name = "detector_cascade"
 
@@ -124,55 +142,65 @@ class CascadeResultCheck:
         if unavailable:
             reasons.append("L2 classifier unavailable; continuing with L0+L1")
         if self.config.classifier.required and unavailable:
+            # A failed required dependency, not evidence: this verdict stands.
             verdict = Verdict.DENY if self.config.fail_mode == "closed" else Verdict.ALLOW
             return Decision(verdict=verdict, rule="l2:unavailable", reasons=reasons)
-        if score >= block_above or self._coverage_requires_block(
-            text_values, all_results, block_above
-        ):
+        coverage_block = self._coverage_requires_block(text_values, all_results, block_above)
+        evidence: dict[str, object] = {
+            # Mostly-injected text counts as reaching the block threshold.
+            "score": max(score, block_above) if coverage_block else score,
+            "redact_above": redact_above,
+            "block_above": block_above,
+            "reasons": reasons,
+            "blocked_payload": self._blocked_payload(),
+        }
+        clean = self._payload(deepcopy(content), deepcopy(structured_content), result.is_error)
+        redacted_content = [dict(item) for item in content]
+        redacted_structured = deepcopy(structured_content)
+        for (kind, location, value), detection in zip(text_values, all_results, strict=True):
+            spans = self._merge_spans(detection.spans)
+            if not spans:
+                continue
+            replacement = self._redact(value, spans)
+            if kind == "content":
+                redacted_content[int(location)]["text"] = replacement
+            elif kind == "structured":
+                self._set_path(redacted_structured, location.split("."), replacement)
+        redacted = self._payload(redacted_content, redacted_structured, result.is_error)
+        evidence["redacted_payload"] = redacted if redacted != clean else None
+        if self.config.spotlight:
+            self._mark_content(content, structured_content, result.tool_name)
+        evidence["allow_payload"] = self._payload(content, structured_content, result.is_error)
+        scores = {"cascade.score": score}
+
+        if score >= block_above or coverage_block:
             return Decision(
                 verdict=Verdict.DENY,
                 rule="detector_cascade:block",
                 reasons=[_BLOCKED],
-                scores={"cascade.score": score},
+                scores=scores,
                 modified_payload=self._blocked_payload(),
+                evidence=evidence,
             )
         if score < redact_above:
-            if self.config.spotlight:
-                self._mark_content(content, structured_content, result.tool_name)
             return Decision(
                 verdict=Verdict.ALLOW,
-                scores={"cascade.score": score},
+                scores=scores,
                 reasons=reasons,
-                modified_payload=self._payload(content, structured_content, result.is_error),
+                modified_payload=evidence["allow_payload"],
+                evidence=evidence,
             )
-        for (kind, location, value), detection in zip(text_values, all_results, strict=True):
-            spans = self._merge_spans(detection.spans)
-            replacement = self._redact(value, spans)
-            if kind == "content":
-                content[int(location)]["text"] = replacement
-            elif kind == "structured":
-                self._set_path(structured_content, location.split("."), replacement)
-        payload = self._payload(content, structured_content, result.is_error)
         return Decision(
             verdict=Verdict.REDACT,
             rule="detector_cascade",
             reasons=reasons or ["Possible prompt injection removed from tool result."],
-            scores={"cascade.score": score},
-            modified_payload=payload,
+            scores=scores,
+            modified_payload=redacted,
+            evidence=evidence,
         )
 
     def _thresholds(self, server_id: str, tool_name: str) -> tuple[float, float]:
-        override = self.config.tool_overrides.get(tool_name) or self.config.server_overrides.get(
-            server_id
-        )
-        return (
-            override.redact_above
-            if override and override.redact_above is not None
-            else self.config.redact_above,
-            override.block_above
-            if override and override.block_above is not None
-            else self.config.block_above,
-        )
+        return thresholds_for(self.config, server_id, tool_name)
 
     @staticmethod
     def _collect_strings(
@@ -271,4 +299,4 @@ class CascadeResultCheck:
                     CascadeResultCheck._mark_strings(item, marker_start, marker_end)
 
 
-__all__ = ["CascadeResult", "CascadeResultCheck", "DetectorCascade"]
+__all__ = ["CascadeResult", "CascadeResultCheck", "DetectorCascade", "thresholds_for"]

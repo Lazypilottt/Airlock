@@ -46,6 +46,18 @@ class TaintConfig(BaseModel):
     match_domains: bool = True
 
 
+class ApprovalConfig(BaseModel):
+    """How ASK verdicts reach a human."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    terminal: bool = Field(
+        default=True,
+        description="Ask on the controlling terminal; false turns every ASK into DENY.",
+    )
+    timeout_seconds: float = Field(default=30.0, gt=0, le=3600)
+
+
 LabelName = Literal["source_untrusted", "source_secret", "sink"]
 ArgRoleName = Literal["destination", "content", "path", "code"]
 
@@ -89,8 +101,13 @@ class AirlockConfig(BaseModel):
     labels: list[LabelOverride] = Field(default_factory=list)
     taint: TaintConfig = Field(default_factory=TaintConfig)
     trusted_values: list[str] = Field(default_factory=list)
+    policy: Path | None = Field(
+        default=None,
+        description="Policy file; the bundled packs/policies/default.yaml when unset.",
+    )
+    approvals: ApprovalConfig = Field(default_factory=ApprovalConfig)
 
-    @field_validator("data_dir", "log_path", mode="before")
+    @field_validator("data_dir", "log_path", "policy", mode="before")
     @classmethod
     def _expand_path(cls, v: Any) -> Any:
         if isinstance(v, (str, Path)):
@@ -157,6 +174,7 @@ def load_config(config_path: Path | str | None = None) -> AirlockConfig:
 
 __all__ = [
     "AirlockConfig",
+    "ApprovalConfig",
     "ClassifierConfig",
     "ConfigError",
     "LabelOverride",
