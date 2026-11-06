@@ -24,6 +24,7 @@ from airlock.policy.schema import CompiledPolicy, PolicyEvent, PolicyMatch, Tain
 from airlock.registry.checks import DescriptionCheck, StubDescriptionCheck
 from airlock.registry.labels import LabelResolver, ToolLabels
 from airlock.registry.store import ToolRegistry
+from airlock.registry.trifecta import Trifecta, find_trifecta
 from airlock.taint.table import TaintTable
 from airlock.taint.tracker import TrustedValues
 
@@ -146,6 +147,27 @@ class Engine:
         )
         self.policy: PolicyProvider | None = policy
         self.approver: Approver = approver if approver is not None else NoApprover()
+        self._trifectas_reported: set[Trifecta] = set()
+
+    def note_client(self, server_id: str, client: str) -> None:
+        """Record that MCP client ``client`` uses ``server_id`` (shared across processes)."""
+        self.registry.record_client_server(client, server_id)
+
+    async def report_trifecta(self, client: str) -> Trifecta | None:
+        """Check ``client``'s whole toolset for the lethal trifecta.
+
+        Returns a trifecta the first time this engine sees it (and logs it as an
+        alert), and ``None`` when there is none or it was already reported.
+        """
+        found = find_trifecta(self.registry, client)
+        if found is None or found in self._trifectas_reported:
+            return None
+        self._trifectas_reported.add(found)
+        if self.audit_store:
+            await self.audit_store.log_alert(
+                kind="trifecta", severity="warning", message=found.message(limit=50)
+            )
+        return found
 
     @property
     def mode(self) -> str:
@@ -470,8 +492,12 @@ class Engine:
             latency_ms=checks.latency_ms,
             evidence={"blocked_payload": evidence.get("blocked_payload"), "taint": taint_items},
         )
-        if VERDICT_SEVERITY[checks.verdict] > VERDICT_SEVERITY[verdict]:
-            # Another check (or a failing check under fail_mode: closed) is stricter.
+        check_severity = VERDICT_SEVERITY[checks.verdict]
+        if check_severity > VERDICT_SEVERITY[verdict] or (
+            checks.verdict is Verdict.DENY and verdict is Verdict.DENY
+        ):
+            # Another check (a honeytoken hit, or a failing check under
+            # fail_mode: closed) is stricter, or denies too and names the cause.
             checks.reasons = checks.reasons + [r for r in reasons if r not in checks.reasons]
             return checks
         for reason in checks.reasons:

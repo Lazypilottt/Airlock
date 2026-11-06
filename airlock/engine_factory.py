@@ -15,6 +15,8 @@ from airlock.approve.terminal import TerminalApprover
 from airlock.config import AirlockConfig
 from airlock.detect.cascade import CascadeResultCheck
 from airlock.engine import Engine, PolicyProvider
+from airlock.honeytokens.check import HoneytokenCheck
+from airlock.honeytokens.store import WatchedHoneytokens, store_path
 from airlock.policy.loader import PolicySource, default_policy_path
 from airlock.taint.tracker import TaintCheck, TaintRecordCheck
 
@@ -44,6 +46,7 @@ def build_engine(
     *,
     detectors: bool = True,
     flow: bool = True,
+    honeytokens: bool = True,
     policy: PolicyProvider | bool | None = True,
     approver: Approver | None = None,
     extra_tool_call_checks: Sequence[Any] = (),
@@ -57,6 +60,7 @@ def build_engine(
         detectors: Run the L0/L1/L2 detector cascade on tool results.
         flow: Run data-flow checks: taint recording on results and taint
             matching on calls.
+        honeytokens: Deny calls carrying a token from ``data_dir/honeytokens.json``.
         policy: ``True`` loads ``config.policy`` (or the bundled default
             policy); ``False``/``None`` runs without a policy (each check
             decides its own verdict); or pass a policy provider.
@@ -82,6 +86,10 @@ def build_engine(
         approver=approver if approver is not None else default_approver(cfg),
         **engine_kwargs,
     )
+    if honeytokens:
+        engine.add_tool_call_check(
+            HoneytokenCheck(WatchedHoneytokens(store_path(cfg.data_dir)), engine.audit_store)
+        )
     if flow and cfg.taint.enabled:
         # Record before any detector rewrites the result: taint the original text.
         engine.add_tool_result_check(TaintRecordCheck(cfg, engine.labels_for))

@@ -12,13 +12,16 @@ from typing import Annotated
 import typer
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from airlock.audit.store import AuditStore
 from airlock.config import ConfigError, load_config
 from airlock.engine_factory import build_engine
+from airlock.honeytokens.cli import honeytokens_app
 from airlock.policy.cli import policy_app
 from airlock.policy.schema import PolicyError
 from airlock.registry.store import ToolRegistry, labels_from_row
+from airlock.registry.trifecta import find_trifecta
 from airlock.transport.stdio import run_stdio_proxy
 
 app = typer.Typer(
@@ -34,6 +37,7 @@ tools_app = typer.Typer(
 )
 app.add_typer(tools_app, name="tools")
 app.add_typer(policy_app, name="policy")
+app.add_typer(honeytokens_app, name="honeytokens")
 
 
 def _not_implemented() -> None:
@@ -210,8 +214,20 @@ def tools_list(
         row["label_origin"] = resolved["origin"]
         row["label_source"] = resolved["source"]
 
+    trifectas = [
+        found
+        for client in registry.clients()
+        if (found := find_trifecta(registry, client)) is not None
+        and (
+            server is None
+            or any(t.startswith(f"{server}.") for t in found.sink + found.private + found.untrusted)
+        )
+    ]
+
     if json_output:
         print(json.dumps(tool_rows, indent=2))
+        for found in trifectas:
+            sys.stderr.write(f"Warning: {found.message(limit=50)}\n")
         return
 
     if not tool_rows:
@@ -252,6 +268,9 @@ def tools_list(
         )
 
     console.print(table)
+    for found in trifectas:
+        console.print()
+        console.print(Text.assemble(("Warning: ", "bold yellow"), found.message(limit=50)))
 
 
 @tools_app.command(name="diff")
@@ -355,12 +374,6 @@ def init() -> None:
 @app.command()
 def uninstall() -> None:
     """Uninstall Airlock configurations and wrappers."""
-    _not_implemented()
-
-
-@app.command()
-def honeytokens() -> None:
-    """Manage planted honeytokens and fake credentials."""
     _not_implemented()
 
 

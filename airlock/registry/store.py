@@ -139,6 +139,19 @@ class ToolRegistry:
             for column, ddl in _LABEL_COLUMNS:
                 if column not in existing_columns:
                     conn.execute(f"ALTER TABLE tools ADD COLUMN {column} {ddl}")
+            # Which servers each MCP client (by its initialize clientInfo.name) uses.
+            # Every `airlock wrap` process of that client writes here, so the
+            # toolset can be judged as a whole (lethal trifecta).
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS client_servers (
+                    client TEXT NOT NULL,
+                    server_id TEXT NOT NULL,
+                    last_seen REAL NOT NULL,
+                    PRIMARY KEY (client, server_id)
+                );
+                """
+            )
             conn.commit()
         finally:
             conn.close()
@@ -402,8 +415,52 @@ class ToolRegistry:
                 (server_id,),
             )
             count = cursor.rowcount
+            conn.execute("DELETE FROM client_servers WHERE server_id = ?", (server_id,))
             conn.commit()
             return count
+        finally:
+            conn.close()
+
+    def record_client_server(self, client: str, server_id: str, now: float | None = None) -> None:
+        """Note that ``client`` uses ``server_id`` (refreshes the time it was last seen)."""
+        conn = self._get_connection()
+        try:
+            conn.execute(
+                """
+                INSERT INTO client_servers (client, server_id, last_seen) VALUES (?, ?, ?)
+                ON CONFLICT (client, server_id) DO UPDATE SET last_seen = excluded.last_seen
+                """,
+                (client, server_id, time.time() if now is None else now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def client_servers(self, client: str, max_age: float | None = None) -> list[str]:
+        """Servers ``client`` was seen using, within ``max_age`` seconds when given."""
+        conn = self._get_connection()
+        try:
+            if max_age is None:
+                rows = conn.execute(
+                    "SELECT server_id FROM client_servers WHERE client = ? ORDER BY server_id",
+                    (client,),
+                )
+            else:
+                rows = conn.execute(
+                    "SELECT server_id FROM client_servers WHERE client = ? AND last_seen >= ? "
+                    "ORDER BY server_id",
+                    (client, time.time() - max_age),
+                )
+            return [row["server_id"] for row in rows]
+        finally:
+            conn.close()
+
+    def clients(self) -> list[str]:
+        """Every client name seen."""
+        conn = self._get_connection()
+        try:
+            rows = conn.execute("SELECT DISTINCT client FROM client_servers ORDER BY client")
+            return [row["client"] for row in rows]
         finally:
             conn.close()
 

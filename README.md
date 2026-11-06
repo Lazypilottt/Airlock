@@ -107,6 +107,35 @@ answer within `approvals.timeout_seconds` (default 30) denies the call, and so
 does the absence of a terminal, which is the case when a desktop app launches
 the server. `approvals: {terminal: false}` turns every `ask` into a deny.
 
+### Honeytokens
+
+Honeytokens are fake secrets planted where a compromised agent would look.
+Airlock denies any outgoing call that carries one, plain or base64-, hex- or
+URL-encoded, writes a high-severity alert to the audit log and prints a loud
+warning on stderr. No policy rule can allow it.
+
+```bash
+uv run airlock honeytokens create                      # AWS key pair, GitHub token, DB password, canary URL
+uv run airlock honeytokens create --write ~/decoy/.env --write ~/decoy/.aws/credentials
+uv run airlock honeytokens list
+```
+
+The tokens are invalid by construction: the AWS key ID contains a character
+real key IDs never use, the GitHub token has a wrong checksum, and the
+password and canary URL point at `127.0.0.1`. Decoy files start with a comment
+saying they are fake, are created owner-only, and are never written over an
+existing file; Airlock asks before writing each one (`--yes` skips the
+question). Running `airlock wrap` processes pick up new tokens within a second.
+
+### Lethal-trifecta warning
+
+An agent that can read untrusted input, read private data and send data out
+can be steered into leaking that data. Each `airlock wrap` process records
+which MCP client it serves (the `clientInfo.name` from `initialize`) in the
+shared registry, so the check covers all of that client's servers. When all
+three legs are present, Airlock warns on stderr, naming the tools on each leg,
+and `airlock tools list` shows the warning.
+
 ### Optional Prompt Guard 2 classifier
 
 The L2 classifier is optional and is unavailable until the gated Meta model

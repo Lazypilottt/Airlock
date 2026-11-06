@@ -6,8 +6,8 @@ treated as implemented features.
 ## Outbound policy layers
 
 The default engine (`airlock.engine_factory.build_engine`) runs taint tracking
-and the policy engine (the bundled default policy unless `policy:` is set). It
-does not yet run the honeytoken check (planned for v0.2).
+the policy engine (the bundled default policy unless `policy:` is set) and the
+honeytoken check.
 
 With a policy loaded, taint hits, detector scores and quarantine status only
 become verdicts through rules. A custom policy that leaves out one of the
@@ -32,9 +32,23 @@ with respect to the classifier, not an indication that the result is benign.
 
 ## Placeholder CLI commands
 
-`serve`, `init`, `honeytokens`, `report`, and `uninstall` are placeholders.
-Use `wrap`, `tools`, `policy` and `logs` for the currently implemented CLI
+`serve`, `init`, `report`, and `uninstall` are placeholders. Use `wrap`,
+`tools`, `policy`, `honeytokens` and `logs` for the currently implemented CLI
 surface.
+
+## Honeytokens and the trifecta warning
+
+- Honeytokens are matched literally after decoding (base64, hex, URL
+  encoding, HTML entities). A token that is split, reversed or re-encoded in
+  another way is not caught.
+- A honeytoken hit follows the mode: in shadow mode the call goes through, but
+  the alert and the stderr warning still fire.
+- The trifecta check runs when a wrapped server lists its tools. Clients
+  start servers at about the same time, so the first servers to list may not
+  see the others yet; a server listed later reports it. Servers not seen for
+  seven days drop out of a client's toolset.
+- Two running copies of the same client (same `clientInfo.name`) count as one
+  toolset.
 
 ## Terminal approvals
 

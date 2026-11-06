@@ -10,6 +10,7 @@ import signal
 import sys
 import uuid
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from airlock.engine import Engine
@@ -55,6 +56,39 @@ def _write_error(
             }
         )
     )
+
+
+@dataclass
+class _ClientState:
+    """What the proxy learned about the MCP client (from its ``initialize`` request)."""
+
+    name: str | None = None
+
+
+def _note_client(engine: Engine, server_id: str, client: _ClientState, params: Any) -> None:
+    info = params.get("clientInfo") if isinstance(params, dict) else None
+    name = info.get("name") if isinstance(info, dict) else None
+    if not isinstance(name, str) or not name.strip():
+        return
+    client.name = " ".join(name.split())[:100]
+    try:
+        engine.note_client(server_id, client.name)
+    except Exception as exc:
+        _log_warning(f"Could not record the client's servers: {type(exc).__name__}: {exc}")
+
+
+async def _warn_trifecta(engine: Engine, client: _ClientState) -> None:
+    """Warn on stderr when the client's servers together form the lethal trifecta."""
+    if client.name is None:
+        return
+    try:
+        found = await engine.report_trifecta(client.name)
+    except Exception as exc:
+        _log_warning(f"Trifecta check failed: {type(exc).__name__}: {exc}")
+        return
+    if found is not None:
+        sys.stderr.write(f"[airlock] WARNING: {found.message()}\n")
+        sys.stderr.flush()
 
 
 def _blocked_result(reasons: Sequence[str]) -> dict[str, Any]:
@@ -143,6 +177,7 @@ async def _client_to_server_relay(
     server_id: str,
     pending_requests: dict[Any, dict[str, Any]],
     stop_event: asyncio.Event,
+    client: _ClientState | None = None,
 ) -> None:
     """Read lines from client stdin, apply outbound checks, and forward to server.
 
@@ -161,6 +196,7 @@ async def _client_to_server_relay(
             pending_requests,
             stop_event,
             approvals,
+            client if client is not None else _ClientState(),
         )
     finally:
         for task in approvals:
@@ -177,6 +213,7 @@ async def _client_loop(
     pending_requests: dict[Any, dict[str, Any]],
     stop_event: asyncio.Event,
     approvals: set[asyncio.Task[None]],
+    client: _ClientState,
 ) -> None:
     while not stop_event.is_set():
         if stdin_reader is not None:
@@ -215,6 +252,9 @@ async def _client_loop(
             _log_warning("Client request has an invalid JSON-RPC id and was dropped")
             _write_error(write_stdout, None, -32600, "Invalid Request")
             continue
+
+        if method == "initialize":
+            _note_client(engine, server_id, client, msg.get("params"))
 
         if method == "tools/call":
             params = msg.get("params")
@@ -307,8 +347,10 @@ async def _server_to_client_relay(
     server_id: str,
     pending_requests: dict[Any, dict[str, Any]],
     stop_event: asyncio.Event,
+    client: _ClientState | None = None,
 ) -> None:
     """Read lines from server stdout, apply inbound checks, and forward to client."""
+    client = client if client is not None else _ClientState()
     internal_futures: dict[str, asyncio.Future[list[dict[str, Any]]]] = {}
     bg_tasks: set[asyncio.Task[None]] = set()
 
@@ -374,6 +416,7 @@ async def _server_to_client_relay(
                 try:
                     tools_data = await asyncio.wait_for(future, timeout=5.0)
                     await engine.on_tools_listed(server_id, tools_data)
+                    await _warn_trifecta(engine, client)
                 except Exception as exc:
                     _log_warning(f"Failed to refresh registry on list_changed: {exc}")
                 write_stdout(notification_line)
@@ -476,6 +519,7 @@ async def _server_to_client_relay(
                     raw_tools = result_obj["tools"]
                     if isinstance(raw_tools, list):
                         filtered_tools = await engine.on_tools_listed(server_id, raw_tools)
+                        await _warn_trifecta(engine, client)
                         result_obj["tools"] = [
                             t.model_dump(
                                 by_alias=True,
@@ -533,6 +577,7 @@ async def run_stdio_proxy(
 
     pending_requests: dict[Any, dict[str, Any]] = {}
     stop_event = asyncio.Event()
+    client = _ClientState()
 
     # Signal handling
     def _handle_signal(sig: int) -> None:
@@ -564,6 +609,7 @@ async def run_stdio_proxy(
             server_id=server_id,
             pending_requests=pending_requests,
             stop_event=stop_event,
+            client=client,
         )
     )
 
@@ -577,6 +623,7 @@ async def run_stdio_proxy(
             server_id=server_id,
             pending_requests=pending_requests,
             stop_event=stop_event,
+            client=client,
         )
     )
 

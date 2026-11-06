@@ -69,6 +69,21 @@ class AuditStore:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_session ON decisions(session_id);")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_tool ON decisions(tool_name);")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_verdict ON decisions(verdict);")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                kind TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                message TEXT NOT NULL,
+                session_id TEXT,
+                server_id TEXT,
+                tool_name TEXT
+            );
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(ts);")
         conn.commit()
 
     def start(self) -> None:
@@ -91,6 +106,25 @@ class AuditStore:
                     break
 
                 try:
+                    if item.get("_table") == "alerts":
+                        conn.execute(
+                            """
+                            INSERT INTO alerts (
+                                ts, kind, severity, message, session_id, server_id, tool_name
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                item["ts"],
+                                item["kind"],
+                                item["severity"],
+                                item["message"],
+                                item["session_id"],
+                                item["server_id"],
+                                item["tool_name"],
+                            ),
+                        )
+                        conn.commit()
+                        continue
                     conn.execute(
                         """
                         INSERT INTO decisions (
@@ -167,6 +201,67 @@ class AuditStore:
             "result_preview": final_result_preview or None,
         }
         await self._queue.put(record)
+
+    async def log_alert(
+        self,
+        *,
+        kind: str,
+        severity: str,
+        message: str,
+        session_id: str | None = None,
+        server_id: str | None = None,
+        tool_name: str | None = None,
+    ) -> None:
+        """Queue an alert (honeytoken hit, lethal trifecta...) for the ``alerts`` table."""
+        self.start()
+        await self._queue.put(
+            {
+                "_table": "alerts",
+                "ts": time.time(),
+                "kind": kind,
+                "severity": severity,
+                "message": sanitize_preview(message, max_length=2000),
+                "session_id": session_id,
+                "server_id": server_id,
+                "tool_name": tool_name,
+            }
+        )
+
+    def query_alerts(
+        self, kind: str | None = None, since: str | float | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Most recent alerts first."""
+        if not self.db_path.is_file():
+            return []
+        conn = sqlite3.connect(str(self.db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            has_table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'alerts'"
+            ).fetchone()
+            if not has_table:
+                return []
+            clauses: list[str] = []
+            params: list[Any] = []
+            if kind:
+                clauses.append("kind = ?")
+                params.append(kind)
+            if since is not None:
+                cutoff = (
+                    float(since)
+                    if isinstance(since, (int, float))
+                    else time.time() - parse_duration_to_seconds(str(since))
+                )
+                clauses.append("ts >= ?")
+                params.append(cutoff)
+            where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+            params.append(limit)
+            rows = conn.execute(
+                f"SELECT * FROM alerts {where_sql} ORDER BY id DESC LIMIT ?", params
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
 
     async def flush(self) -> None:
         """Wait until all queued records are written to SQLite."""

@@ -550,10 +550,10 @@ async def test_unlisted_tools_fall_back_to_name_labels(tmp_path: Path) -> None:
 
 def test_default_factory_registers_flow_and_detectors(tmp_path: Path) -> None:
     names = build_engine(AirlockConfig(data_dir=tmp_path)).check_names()
-    assert names["tool_call"] == ["taint"]
+    assert names["tool_call"] == ["honeytoken", "taint"]
     assert names["tool_result"] == ["taint_record", "detector_cascade"]
     detect_only = build_engine(AirlockConfig(data_dir=tmp_path), flow=False).check_names()
-    assert detect_only["tool_call"] == []
+    assert detect_only["tool_call"] == ["honeytoken"]
     assert detect_only["tool_result"] == ["detector_cascade"]
 
 
