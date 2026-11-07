@@ -276,14 +276,22 @@ and `airlock tools list` shows the warning.
 
 The L2 classifier is optional and is unavailable until the gated Meta model
 has been authorized. Accept Meta's Llama license on Hugging Face, set
-`HF_TOKEN`, install the classifier extras, and export either model:
+`HF_TOKEN`, export the model once with the build-time extra, then install the
+runtime extra:
 
 ```bash
-uv pip install -e '.[classifier]'
+# one-off export, in its own environment (optimum pins an older transformers)
+uv venv .venv-export && uv pip install --python .venv-export -e '.[classifier-export]'
 export HF_TOKEN=...
-python scripts/export_promptguard.py --variant 22M
-# Use --variant 86M for the larger model.
+.venv-export/bin/python scripts/export_promptguard.py --variant 22M   # or 86M
+
+# runtime
+uv pip install -e '.[classifier]'
 ```
+
+The two extras cannot share an environment: `optimum` still requires a
+`transformers` older than 4.58, which has published advisories, so it is kept
+out of the runtime install.
 
 Models are stored under `data_dir/models/`. By default, a missing classifier
 is logged once and L0/L1 continue; require it with:

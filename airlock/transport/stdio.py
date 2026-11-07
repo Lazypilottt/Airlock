@@ -551,7 +551,12 @@ async def run_stdio_proxy(
     if not command:
         raise ValueError("No command provided to wrap")
 
-    active_engine = engine if engine is not None else Engine()
+    if engine is None:
+        # Same engine as every other entry point (policy, taint, honeytokens...).
+        from airlock.engine_factory import build_engine
+
+        engine = build_engine()
+    active_engine = engine
     server_id = get_server_id(command, name)
     session_id = str(uuid.uuid4())
     write_stdout = stdout_writer or _default_stdout_write

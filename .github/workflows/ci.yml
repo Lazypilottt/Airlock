@@ -37,3 +37,6 @@ jobs:
 
       - name: Run Pytest
         run: uv run --python 3.12 pytest
+
+      - name: Red-team report card (scripted agent, no network)
+        run: uv run --python 3.12 airlock attack --sdk

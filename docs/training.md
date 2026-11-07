@@ -57,7 +57,8 @@ needs roughly 20 to 60 minutes per model for the default dataset size.
 Download `runs/<best model>/airlock-v1/` (zip it in the notebook) and unpack
 it to `~/.config/airlock/models/airlock-v1/`, so that
 `~/.config/airlock/models/airlock-v1/model.int8.onnx` exists. Install the
-classifier extra locally (`uv sync --extra classifier`) and select it:
+runtime classifier extra locally (`uv sync --extra classifier`; the notebook's
+`optimum` toolchain is only needed for export) and select it:
 
 ```yaml
 # ~/.config/airlock/airlock.yaml

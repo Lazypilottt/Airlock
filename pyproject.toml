@@ -1,6 +1,6 @@
 [project]
 name = "airlock-mcp"
-version = "0.2.0"
+version = "1.0.0"
 description = "Airlock: Firewall for AI agents using MCP tools"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -21,9 +21,16 @@ dependencies = [
 airlock = "airlock.cli:app"
 
 [project.optional-dependencies]
+# Runtime: score with an exported model (onnxruntime + tokenizer).
 classifier = [
+    "onnxruntime>=1.18",
+    "transformers>=5.10",
+]
+# Build time only (scripts/export_promptguard.py, scripts/train_classifier.py):
+# optimum still caps transformers below 4.58, which has known advisories, so it
+# is kept out of the runtime extra and cannot be installed alongside it.
+classifier-export = [
     "optimum[onnxruntime]>=1.24.0",
-    "transformers>=4.45.0",
 ]
 bench = [
     "agentdojo>=0.1.31",
@@ -39,6 +46,9 @@ otel = [
     "opentelemetry-exporter-otlp-proto-http>=1.27",
 ]
 
+[tool.uv]
+conflicts = [[{ extra = "classifier" }, { extra = "classifier-export" }]]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -48,6 +58,32 @@ packages = ["airlock"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "packs" = "airlock/_packs"
+
+[tool.hatch.build.targets.sdist]
+# An explicit list: only these paths go into the source distribution.
+only-include = [
+    "airlock",
+    "attack",
+    "bench",
+    "examples",
+    "packs",
+    "scripts",
+    "tests",
+    "docs/demo-script.md",
+    "docs/docker.md",
+    "docs/evaluation.md",
+    "docs/known-issues.md",
+    "docs/threat-model.md",
+    "docs/training.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "Dockerfile",
+    "LICENSE",
+    "README.md",
+    "SECURITY.md",
+    "pyproject.toml",
+    "uv.lock",
+]
 
 [dependency-groups]
 dev = [

@@ -1,0 +1,73 @@
+name: Release
+
+# Runs only when a GitHub release is published (or by hand), never on a plain
+# tag push. Publishing uses PyPI trusted publishing: no API token is stored.
+# Before the first run, add this repository as a trusted publisher on
+# test.pypi.org and pypi.org (environments `testpypi` and `pypi`).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Where to publish"
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Checks
+        run: |
+          uv run --python 3.12 ruff check .
+          uv run --python 3.12 mypy airlock
+          uv run --python 3.12 pytest
+      - name: Build
+        run: uv build
+      - name: Smoke-test the wheel in a clean environment
+        run: |
+          uv venv --python 3.12 /tmp/clean
+          uv pip install --python /tmp/clean/bin/python dist/*.whl
+          /tmp/clean/bin/airlock --help
+          /tmp/clean/bin/airlock attack --sdk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  testpypi:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  pypi:
+    needs: build
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -31,6 +31,18 @@ SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
         re.compile(r"\b((?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,})\b"),
         "[REDACTED_GITHUB_TOKEN]",
     ),
+    # Vendor key formats: OpenAI/Anthropic-style sk-, Stripe sk_/rk_, Slack xox*-,
+    # Google AIza..., JSON Web Tokens
+    (
+        re.compile(r"\b(?:sk|rk)[-_](?:[A-Za-z]+[-_])?[A-Za-z0-9_-]{16,}"),
+        "[REDACTED_API_KEY]",
+    ),
+    (re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"), "[REDACTED_SLACK_TOKEN]"),
+    (re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"), "[REDACTED_GOOGLE_KEY]"),
+    (
+        re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
+        "[REDACTED_JWT]",
+    ),
     # Bearer authorization tokens
     (
         re.compile(r"(?i)(\bbearer\s+)([A-Za-z0-9_\-\.~+/]+=*)"),
@@ -40,13 +52,23 @@ SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
         re.compile(
             r"""(?ix)
-            (['"]?)\b(api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|passwd|private[_-]?key|key)\b\1
+            (['"]?)\b((?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|passwd|private[_-]?key|key))\b\1
             (\s*[:=]\s*['"]?)
             ([A-Za-z0-9_\-\.~+/]{16,})
             (['"]?)
             """
         ),
         r"\1\2\1\3[REDACTED_SECRET]\5",
+    ),
+    # High-entropy strings anywhere: 24+ characters mixing lower case, upper case
+    # and digits (random keys, passwords, honeytokens). Hex hashes and words are
+    # left alone; previews lose a little detail, which is the safe trade-off.
+    (
+        re.compile(
+            r"(?<![A-Za-z0-9+/_-])(?=[A-Za-z0-9+/_-]{24,})(?=[^\s]*?[a-z])(?=[^\s]*?[A-Z])"
+            r"(?=[^\s]*?[0-9])[A-Za-z0-9+/_-]{24,}={0,2}(?![A-Za-z0-9+/_-])"
+        ),
+        "[REDACTED_HIGH_ENTROPY]",
     ),
 ]
 

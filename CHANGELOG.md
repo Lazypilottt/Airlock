@@ -1,5 +1,54 @@
 # Changelog
 
+## 1.0.0 - 2026-11-07
+
+### Added
+
+- Classifier tooling: dataset builder with licence-checked public sets,
+  synthetic indirect injections (English, Spanish, Hindi, obfuscated) and
+  hard negatives, AgentDojo strings kept out; training and int8 export
+  script for a GPU notebook; `classifier: airlock-v1 | promptguard-22m |
+  promptguard-86m`.
+- Python SDK (`airlock.sdk`): `Airlock`, sessions with trusted user prompts,
+  `@firewall.tool` / `wrap_tool` for sync and async functions; examples for
+  a plain OpenAI-compatible loop and PydanticAI.
+- Slack approvals over Socket Mode (tokens from the environment, approver
+  identity in the audit log) and OpenTelemetry spans and counters.
+- Auto-labelling of unknown tools (Anthropic or any OpenAI-compatible
+  endpoint; description treated as untrusted; proposals can only add
+  labels), `airlock tools review` and `airlock tools export-pack`.
+- `airlock dashboard`: local web UI (timeline with live updates, decision
+  detail, false-positive feedback, taint flow view, tools, report), 127.0.0.1
+  only, one-time link.
+- `airlock attack`: red-team report card (`--sdk`, automated) and a guided
+  client mode, with a local malicious test server and canary.
+- Evaluation: benign false-positive set, latency per layer and end to end,
+  `docs/evaluation.md`, `docs/threat-model.md`, `docs/demo-script.md`.
+- Packaging: release workflow with PyPI trusted publishing, Dockerfile
+  (non-root), `CONTRIBUTING.md`, `SECURITY.md`, issue templates.
+
+### Changed
+
+- The runtime `classifier` extra no longer pulls `optimum`; exporting a model
+  uses the separate `classifier-export` extra (in its own environment).
+- `exfil-long-query` and `exfil-markdown-image` now need a single long
+  parameter value (README badge links were blocked).
+
+### Fixed
+
+- Secret masking missed prefixed variable names (`OPENAI_API_KEY=`), vendor
+  key formats (`sk-`, Slack, Google, JWT) and random high-entropy strings
+  in log previews.
+- The stdio proxy's fallback engine (used only when no engine is passed) now
+  comes from the default factory.
+- The source distribution is built from an explicit list of paths.
+
+### Security
+
+- Dependency audit against OSV: no known vulnerabilities in the runtime
+  dependencies; `transformers` 4.57.x (11 advisories) is confined to the
+  build-time `classifier-export` extra, which `optimum` still requires.
+
 ## 0.2.0 - 2026-11-06
 
 ### Added

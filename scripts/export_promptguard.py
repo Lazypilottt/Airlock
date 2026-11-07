@@ -33,7 +33,8 @@ def export_model(variant: str, data_dir: Path) -> Path:
         transformers = importlib.import_module("transformers")
     except ImportError as exc:
         raise SystemExit(
-            "Install the classifier extras first: pip install 'airlock-mcp[classifier]'"
+            "Install the export extra first, in its own environment: "
+            "pip install 'airlock-mcp[classifier-export]'"
         ) from exc
 
     model_id = MODEL_IDS[variant]
