@@ -24,10 +24,10 @@ rules:
   - {id: credential-id-rsa, description: RSA private key path, keywords: [id_rsa], applies_to: both, severity: high, score: 0.9}
   - {id: credential-password, description: Password request, pattern: '\b(?:password|passwd|secret)\s*[:=]', applies_to: both, severity: medium, score: 0.7}
   - {id: exfil-query-data, description: Data in URL query, pattern: 'https?://[^\s)]+[?&](?:data|text|content|payload|secret|token)=', applies_to: both, severity: high, score: 0.9}
-  - {id: exfil-long-query, description: Long URL query, pattern: 'https?://[^\s)]+\?[^\s)]{40,}', applies_to: both, severity: high, score: 0.85}
+  - {id: exfil-long-query, description: Long URL query value, pattern: 'https?://[^\s)\]]+\?(?:[^\s)\]&#]*&)*[\w-]+=[^\s)\]&#]{40,}', applies_to: both, severity: high, score: 0.85}
   - {id: exfil-webhook, description: Webhook exfiltration, pattern: '\b(?:webhook|requestbin|pastebin|ngrok)\b', applies_to: both, severity: high, score: 0.8}
   - {id: exfil-base64-param, description: Encoded query payload, pattern: '[?&][\w-]*(?:b64|base64|encoded)[\w-]*=', applies_to: both, severity: high, score: 0.85}
-  - {id: exfil-markdown-image, description: Markdown image exfiltration, pattern: '!\[[^\]]*\]\([^)]*\?[^\)]{24,}\)', applies_to: both, severity: high, score: 0.85}
+  - {id: exfil-markdown-image, description: Markdown image exfiltration, pattern: '!\[[^\]]*\]\([^)\s]*\?(?:[^)\s&#]*&)*[\w-]+=[^)\s&#]{24,}\)', applies_to: both, severity: high, score: 0.85}
   - {id: tool-name-mcp-send, description: Foreign send tool name, keywords: [send_email], applies_to: both, severity: medium, score: 0.7}
   - {id: tool-name-mcp-http, description: Foreign HTTP tool name, keywords: [http_request], applies_to: both, severity: medium, score: 0.7}
   - {id: tool-name-mcp-shell, description: Foreign shell tool name, keywords: [run_shell], applies_to: both, severity: medium, score: 0.75}

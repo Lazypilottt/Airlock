@@ -1,17 +1,97 @@
 # Airlock
 
-A transparent, low-latency firewall for AI agents using Model Context Protocol (MCP) tools.
+> **Demo video:** coming soon. See [`docs/demo-script.md`](docs/demo-script.md).
 
-## What it is
+A local firewall for AI agents that use MCP tools. Airlock sits between your
+MCP client (Claude Desktop, Cursor, your own agent) and its tool servers, and
+checks every tool call and every tool result: prompt injection in results,
+untrusted or secret data on its way out, planted honeytokens, poisoned and
+rug-pulled tool definitions. It runs on your machine and sends nothing
+anywhere unless you turn a feature on.
 
-Airlock sits between an MCP client (such as Cursor or custom agent harnesses) and MCP servers as a transparent security proxy. It inspects and governs both outbound tool invocations and inbound tool execution results, protecting agents against prompt injection, data exfiltration, tool rug pulls, and unauthorized actions.
+```bash
+uv tool install airlock-mcp   # once published to PyPI; until then, from a clone: uv pip install -e .
+```
 
-- **Outbound protection**: Evaluates policy rules, tracks sensitive data taint flowing toward sink tools (e.g., email, HTTP, shell), and verifies honeytokens.
-- **Inbound protection**: Normalizes hidden or obfuscated text (Unicode smuggling, Base64 payloads, HTML comment inject ions), runs multi-tiered detector cascades, and safely redacts or blocks malicious tool outputs.
-- **Tool Integrity**: Pins cryptographic hashes of tool definitions (name, description, schema) and quarantines tools with suspicious changes (rug pulls).
-- **Audit & Forensics**: Records structured decisions and rationale into local SQLite storage, with support for both `shadow` (observation) and `enforce` (blocking) modes.
+## Quick start
 
-## Install
+```bash
+airlock init --mode shadow     # wrap your Claude Desktop / Cursor servers, log only
+# restart the client and use it for a while, then:
+airlock report --since 1d      # what Airlock would have stopped
+airlock dashboard              # timeline, flows, tools (local, one-time link)
+airlock attack --sdk           # red-team report card for your install
+airlock uninstall && airlock init   # when you are happy: re-wrap in enforce mode
+```
+
+## Results
+
+Measured on a laptop CPU (Apple silicon), Airlock 0.2.0 plus the v1.0 work,
+Python 3.12.16, `mcp` 2.3.0, **without the L2 classifier** (rules only). Full
+details and method: [`docs/evaluation.md`](docs/evaluation.md).
+
+| What | Result |
+|---|---|
+| Red-team scenarios (`airlock attack --sdk`, scripted agent that obeys every injection) | 8 / 8 blocked; 8 / 8 succeed without Airlock |
+| False positives on 511 benign tool outputs | 27 flagged (5.28%), mostly articles quoting injections and README badge URLs |
+| Added latency, 10 KB payload, 10k taint entries, p95 over 3 runs on a loaded machine | calls 20-35 ms; results 33-63 ms (over the 50 ms budget in 1 of 3 runs) |
+| AgentDojo (utility and attack success) | not run yet |
+| Damn Vulnerable MCP Server | not run yet |
+
+## How it works
+
+```mermaid
+flowchart LR
+    C[MCP client or SDK agent] -- tools/call --> A
+    A -- allowed call --> S[MCP server]
+    S -- result --> A
+    A -- clean result --> C
+    subgraph A [Airlock engine]
+      direction TB
+      R[Registry: hash pinning, quarantine, labels, trifecta]
+      H[Honeytokens]
+      T[Taint tracker]
+      D[Detectors: L0 normalise, L1 rules, L2 classifier]
+      P[Policy: first matching rule decides]
+      Q[Approvals: terminal or Slack]
+      L[(Audit log)]
+    end
+```
+
+1. **One engine, many doors.** `airlock wrap` (stdio), `airlock serve`
+   (Streamable HTTP), the Python SDK and the benchmark adapter all build the
+   same engine (`airlock.engine_factory.build_engine`).
+2. **Tool definitions** are pinned by hash on first sight; a changed or
+   suspicious definition is quarantined and hidden. Tools are labelled as
+   untrusted sources, secret sources and sinks (label packs, your config, a
+   name heuristic, optionally a model).
+3. **Results** are normalised (hidden Unicode, HTML comments, base64) and
+   scored by rules and, if installed, a small ONNX classifier. Values from
+   labelled sources are recorded as tainted.
+4. **Calls** are scanned for tainted values (encoded, split, transformed or
+   derived) and honeytokens.
+5. **The policy** turns that evidence into allow, redact, ask or deny; the
+   first matching rule wins. ASK goes to a human. Every decision and its
+   reason is written to the audit log, with secrets masked.
+
+## Limits
+
+Airlock does **not** catch:
+
+- data that is paraphrased, summarised or re-encoded in ways it does not
+  decode (stacked encodings, custom ciphers);
+- injections phrased in ways its rules and classifier have not seen;
+- harm done inside a single tool (command injection in a server, a tool with
+  more permissions than it needs) unless a policy rule covers it;
+- secrets read through a tool nobody labelled as a secret source;
+- tainted data moving between separately wrapped stdio servers;
+- anything that does not go through it.
+
+The full list, with the reasons, is in
+[`docs/known-issues.md`](docs/known-issues.md); the threat model is in
+[`docs/threat-model.md`](docs/threat-model.md).
+
+## Install from source
 
 Prerequisites: Python >= 3.12 and [`uv`](https://docs.astral.sh/uv/).
 
@@ -27,7 +107,7 @@ Or install the package:
 uv pip install airlock-mcp
 ```
 
-## Quick start
+## Usage
 
 Install and initialize a local data directory:
 
@@ -402,27 +482,10 @@ tool_overrides:
 spotlight: true
 ```
 
-## How it works
-
-1. **Transport-Agnostic Core**: The core engine (`airlock.engine`) operates strictly on typed events and returns deterministic decisions (`allow`, `redact`, `block`, `quarantine`). Proxies (stdio, HTTP) and benchmark adapters layer on top of this engine without duplicating logic.
-2. **Inbound Normalization & Detection Cascade**:
-   - Level 1: Fast deterministic heuristic rules and regexes.
-   - Level 2: Small local ONNX classification model.
-   - Level 3 (Optional): Asynchronous LLM-as-a-judge for complex ambiguities.
-3. **Outbound Taint Tracking & Policy Enforcement**: Prevents untrusted tool outputs or sensitive secrets from reaching sinks without explicit human or policy approval.
-4. **Fail-Safe Operation**: If a check errors or exceeds the timeout budget, the configured `fail_mode` (`open` or `closed`) applies immediately while logging the incident.
-
 ## Benchmarks
 
-Airlock is designed with a strict latency budget:
-- **Budget**: Under 50 ms p95 added latency per tool call on standard laptop CPU hardware (excluding optional remote LLM judges).
-- Validated against standardized security suites (such as AgentDojo) to evaluate attack detection accuracy with low false-positive rates.
-
-## Limits
-
-- Stdio proxy mode allocates `stdout` exclusively for JSON-RPC MCP protocol traffic. All diagnostic logs are routed to `stderr` or local log files.
-- Offline-first: Airlock makes zero external network requests by default unless explicitly configured (e.g. external LLM judge).
-- Local resource usage: High-throughput streaming environments should adjust `check_timeout_ms` to balance security inspection depth with real-time responsiveness.
+See [`docs/evaluation.md`](docs/evaluation.md). The AgentDojo comparison table
+will be added here once the runs are done; none have been run yet.
 
 ## Contributing
 
