@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.1 - 2026-11-20
+
+First release published to PyPI (1.0.0 was tagged but never published).
+
+### Changed
+
+- Package metadata for PyPI: description, author, project links,
+  classifiers, keywords.
+- Requires `mcp>=2.3` (Airlock uses the 2.x server and client APIs; the old
+  `>=1.0.0` floor allowed versions it cannot run with).
+- README links are absolute, so they work on the PyPI project page.
+
 ## 1.0.0 - 2026-11-07
 
 ### Added

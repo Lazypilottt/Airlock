@@ -1,6 +1,6 @@
 # Airlock
 
-> **Demo video:** coming soon. See [`docs/demo-script.md`](docs/demo-script.md).
+> **Demo video:** coming soon. See [`docs/demo-script.md`](https://github.com/Lazypilottt/Airlock/blob/main/docs/demo-script.md).
 
 A local firewall for AI agents that use MCP tools. Airlock sits between your
 MCP client (Claude Desktop, Cursor, your own agent) and its tool servers, and
@@ -28,7 +28,7 @@ airlock uninstall && airlock init   # when you are happy: re-wrap in enforce mod
 
 Measured on a laptop CPU (Apple silicon), Airlock 0.2.0 plus the v1.0 work,
 Python 3.12.16, `mcp` 2.3.0, **without the L2 classifier** (rules only). Full
-details and method: [`docs/evaluation.md`](docs/evaluation.md).
+details and method: [`docs/evaluation.md`](https://github.com/Lazypilottt/Airlock/blob/main/docs/evaluation.md).
 
 | What | Result |
 |---|---|
@@ -88,8 +88,8 @@ Airlock does **not** catch:
 - anything that does not go through it.
 
 The full list, with the reasons, is in
-[`docs/known-issues.md`](docs/known-issues.md); the threat model is in
-[`docs/threat-model.md`](docs/threat-model.md).
+[`docs/known-issues.md`](https://github.com/Lazypilottt/Airlock/blob/main/docs/known-issues.md); the threat model is in
+[`docs/threat-model.md`](https://github.com/Lazypilottt/Airlock/blob/main/docs/threat-model.md).
 
 ## Install from source
 
@@ -204,7 +204,7 @@ A policy is an ordered list of rules; the first rule whose conditions all hold
 decides the verdict (`allow`, `deny`, `redact` or `ask`). Taint hits, detector
 scores and quarantine status are evidence that rules turn into verdicts. With
 no `policy:` in `airlock.yaml`, `airlock wrap` enforces the bundled
-[`packs/policies/default.yaml`](packs/policies/default.yaml):
+[`packs/policies/default.yaml`](https://github.com/Lazypilottt/Airlock/blob/main/packs/policies/default.yaml):
 
 - deny sink arguments that carry a value read from a secret source;
 - ask before sink arguments carry a value read from an untrusted source;
@@ -492,7 +492,7 @@ spotlight: true
 
 ## Benchmarks
 
-See [`docs/evaluation.md`](docs/evaluation.md). The AgentDojo comparison table
+See [`docs/evaluation.md`](https://github.com/Lazypilottt/Airlock/blob/main/docs/evaluation.md). The AgentDojo comparison table
 will be added here once the runs are done; none have been run yet.
 
 ## Contributing

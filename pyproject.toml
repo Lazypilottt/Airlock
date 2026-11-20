@@ -1,21 +1,40 @@
 [project]
 name = "airlock-mcp"
-version = "1.0.0"
-description = "Airlock: Firewall for AI agents using MCP tools"
+version = "1.0.1"
+description = "A local firewall for AI agents that use MCP tools: prompt-injection detection, taint tracking, honeytokens and tool pinning"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.12"
+authors = [{ name = "Aditya" }]
+keywords = ["mcp", "model-context-protocol", "prompt-injection", "security", "firewall", "agents"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Typing :: Typed",
+]
 dependencies = [
     "typer>=0.12.0",
     "pydantic>=2.0",
     "pyyaml>=6.0",
-    "mcp>=1.0.0",
+    "mcp>=2.3",
     "pyahocorasick>=2.1",
     # Streamable HTTP proxy (`airlock serve`); the same stack the mcp SDK uses.
     "httpx2>=2.16",
     "starlette>=0.40",
     "uvicorn>=0.30",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Lazypilottt/Airlock"
+Repository = "https://github.com/Lazypilottt/Airlock"
+Issues = "https://github.com/Lazypilottt/Airlock/issues"
+Changelog = "https://github.com/Lazypilottt/Airlock/blob/main/CHANGELOG.md"
 
 [project.scripts]
 airlock = "airlock.cli:app"
